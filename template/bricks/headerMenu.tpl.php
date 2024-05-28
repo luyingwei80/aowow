@@ -7,4 +7,4 @@ else:
     echo '<a href="?account=signin">'.Lang::main('signIn').'</a>';
 endif;
 ?>
-|<a href="#" id="toplinks-feedback" class="icon-email"><?=Lang::main('feedback'); ?></a>|<a href="javascript:;" id="toplinks-language"><?=Lang::main('language'); ?></a>
+|<a href="reg">注册游戏账号</a>

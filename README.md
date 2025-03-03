@@ -18,7 +18,7 @@ Also, this project is not meant to be used for commercial puposes of any kind!
 
 ## Requirements
 
-+ Webserver running PHP ≥ 8.0 including extensions:
++ Webserver running PHP ≥ 8.2 including extensions:
   + [SimpleXML](https://www.php.net/manual/en/book.simplexml.php)
   + [GD](https://www.php.net/manual/en/book.image)
   + [MySQL Improved](https://www.php.net/manual/en/book.mysqli.php)
@@ -26,7 +26,7 @@ Also, this project is not meant to be used for commercial puposes of any kind!
   + [File Information](https://www.php.net/manual/en/book.fileinfo.php)
   + [GNU Multiple Precision](https://www.php.net/manual/en/book.gmp.php) (When using TrinityCore as auth source)
 + MySQL ≥ 5.7.0 OR MariaDB ≥ 10.6.4 OR similar
-+ [TDB 335.21101](https://github.com/TrinityCore/TrinityCore/releases/tag/TDB335.21101)
++ [TDB 335.21101](https://github.com/TrinityCore/TrinityCore/releases/tag/TDB335.21101) (no other other providers are supported at this time)
 + WIN: php.exe needs to be added to the `PATH` system variable, if it isn't already. 
 + Tools require cmake: Please refer to the individual repositories for detailed information
   + [MPQExtractor](https://github.com/Sarjuuk/MPQExtractor) / [FFmpeg](https://ffmpeg.org/download.html) / (optional: [BLPConverter](https://github.com/Sarjuuk/BLPConverter))
@@ -72,11 +72,10 @@ Extract the following directories from the client archives into `setup/mpqdata/`
    
    .. once is enough (still apply the localeCode though):
    > \<localeCode>/Interface/TalentFrame/  
-   > \<localeCode>/Interface/Glues/Credits/  
    > \<localeCode>/Interface/Icons/  
    > \<localeCode>/Interface/Spellbook/  
    > \<localeCode>/Interface/PaperDoll/  
-   > \<localeCode>/Interface/GLUES/CHARACTERCREATE/  
+   > \<localeCode>/Interface/Glues/CharacterCreate/  
    > \<localeCode>/Interface/Pictures  
    > \<localeCode>/Interface/PvPRankBadges  
    > \<localeCode>/Interface/FlavorImages  
@@ -84,7 +83,8 @@ Extract the following directories from the client archives into `setup/mpqdata/`
    > \<localeCode>/Sound/  
    
    .. optionaly (not used in AoWoW):
-   > \<localeCode>/Interface/GLUES/LOADINGSCREENS/  
+   > \<localeCode>/Interface/Glues/Loadingscreens/  
+   > \<localeCode>/Interface/Glues/Credits/  
 
 #### 5. Reencode the audio files
 WAV-files need to be reencoded as `ogg/vorbis` and some MP3s may identify themselves as `application/octet-stream` instead of `audio/mpeg`.  

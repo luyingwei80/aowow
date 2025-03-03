@@ -107,6 +107,7 @@ class ItemsPage extends GenericPage
         if (!User::isInGroup(U_GROUP_EMPLOYEE))
             $conditions[] = [['cuFlags', CUSTOM_EXCLUDE_FOR_LISTVIEW, '&'], 0];
 
+
         /*******************/
         /* evaluate filter */
         /*******************/
@@ -141,16 +142,16 @@ class ItemsPage extends GenericPage
         if (isset($this->filter['slot'][INVTYPE_SHIELD]))   // "Off Hand" => "Shield"
             $this->filter['slot'][INVTYPE_SHIELD] = Lang::item('armorSubClass', 6);
 
-
         $infoMask = ITEMINFO_JSON;
         if (array_intersect([63, 64, 125], $xCols))         // 63:buyPrice; 64:sellPrice; 125:reqarenartng
             $infoMask |= ITEMINFO_VENDOR;
 
         if ($xCols)
-            $this->sharedLV['extraCols'] = '$fi_getExtraCols(fi_extraCols, '.(isset($this->filter['gm']) ? $this->filter['gm'] : 0).', '.(array_intersect([63], $xCols) ? 1 : 0).')';
+            $this->sharedLV['extraCols'] = '$fi_getExtraCols(fi_extraCols, '.($this->filter['gm'] ?? 0).', '.(array_intersect([63], $xCols) ? 1 : 0).')';
 
         if ($this->filterObj->error)
             $this->sharedLV['_errors'] = '$1';
+
 
         /******************/
         /* set conditions */
@@ -163,11 +164,13 @@ class ItemsPage extends GenericPage
         if (isset($this->category[2]))
             $conditions[] = ['i.subSubClass', $this->category[2]];
 
+
         /***********************/
         /* handle auto-gemming */
         /***********************/
 
         $this->gemScores = $this->createGemScores();
+
 
         /*************************/
         /* handle upgrade search */
@@ -207,6 +210,7 @@ class ItemsPage extends GenericPage
             }
         }
 
+
         /********************************************************************************************************************************/
         /* group by                                                                                                                     */
         /*                                                                                                                              */
@@ -229,9 +233,9 @@ class ItemsPage extends GenericPage
         );
         $groups     = [];
         $nameSource = [];
-        $grouping   = isset($this->filter['gb']) ? $this->filter['gb'] : null;
+        $grouping   = $this->filter['gb'] ?? 0;
         $extraOpts  = [];
-        $maxResults = CFG_SQL_LIMIT_DEFAULT;
+        $maxResults = Cfg::get('SQL_LIMIT_DEFAULT');
 
         switch ($grouping)
         {
@@ -294,6 +298,7 @@ class ItemsPage extends GenericPage
                 $groups[0] = null;
         }
 
+
         /*****************************/
         /* create lv-tabs for groups */
         /*****************************/
@@ -315,7 +320,7 @@ class ItemsPage extends GenericPage
                     $finalCnd = $conditions;
             }
 
-            $items = new ItemList($finalCnd, ['extraOpts' => array_merge($extraOpts, $this->filterObj->extraOpts)]);
+            $items = new ItemList($finalCnd, ['extraOpts' => array_merge($extraOpts, $this->filterObj->extraOpts), 'calcTotal' => true]);
 
             if ($items->error)
                 continue;
@@ -409,7 +414,7 @@ class ItemsPage extends GenericPage
             }
             else if ($items->getMatches() > $maxResults)
             {
-                $tabData['note'] = sprintf(Util::$tryFilteringString, 'LANG.lvnote_itemsfound', $items->getMatches(), CFG_SQL_LIMIT_DEFAULT);
+                $tabData['note'] = sprintf(Util::$tryFilteringString, 'LANG.lvnote_itemsfound', $items->getMatches(), Cfg::get('SQL_LIMIT_DEFAULT'));
                 $tabData['_truncated'] = 1;
             }
 

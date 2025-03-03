@@ -10,6 +10,8 @@ class ArenaTeamList extends BaseType
 
     private $rankOrder = [];
 
+    public static $contribute = CONTRIBUTE_NONE;
+
     public function getListviewData()
     {
         $data = [];
@@ -46,13 +48,13 @@ class ArenaTeamListFilter extends Filter
     protected $genericFilter = [];
 
     protected $inputFields = array(
-        'na' => [FILTER_V_REGEX,    parent::PATTERN_NAME, false], // name - only printable chars, no delimiter
-        'ma' => [FILTER_V_EQUAL,    1,                    false], // match any / all filter
-        'ex' => [FILTER_V_EQUAL,    'on',                 false], // only match exact
-        'si' => [FILTER_V_LIST,     [1, 2],               false], // side
-        'sz' => [FILTER_V_LIST,     [2, 3, 5],            false], // tema size
-        'rg' => [FILTER_V_CALLBACK, 'cbRegionCheck',      false], // region
-        'sv' => [FILTER_V_CALLBACK, 'cbServerCheck',      false], // server
+        'na' => [parent::V_REGEX,    parent::PATTERN_NAME, false], // name - only printable chars, no delimiter
+        'ma' => [parent::V_EQUAL,    1,                    false], // match any / all filter
+        'ex' => [parent::V_EQUAL,    'on',                 false], // only match exact
+        'si' => [parent::V_LIST,     [1, 2],               false], // side
+        'sz' => [parent::V_LIST,     [2, 3, 5],            false], // tema size
+        'rg' => [parent::V_CALLBACK, 'cbRegionCheck',      false], // region
+        'sv' => [parent::V_CALLBACK, 'cbServerCheck',      false], // server
     );
 
     protected function createSQLForValues()
@@ -70,9 +72,9 @@ class ArenaTeamListFilter extends Filter
         // side [list]
         if (!empty($_v['si']))
         {
-            if ($_v['si'] == 1)
+            if ($_v['si'] == SIDE_ALLIANCE)
                 $parts[] = ['c.race', [1, 3, 4, 7, 11]];
-            else if ($_v['si'] == 2)
+            else if ($_v['si'] == SIDE_HORDE)
                 $parts[] = ['c.race', [2, 5, 6, 8, 10]];
         }
 
@@ -124,7 +126,7 @@ class RemoteArenaTeamList extends ArenaTeamList
     private     $members   = [];
     private     $rankOrder = [];
 
-    public function __construct($conditions = [], $miscData = null)
+    public function __construct(array $conditions = [], array $miscData = [])
     {
         // select DB by realm
         if (!$this->selectRealms($miscData))
@@ -152,7 +154,7 @@ class RemoteArenaTeamList extends ArenaTeamList
         foreach ($this->iterate() as $guid => &$curTpl)
         {
             // battlegroup
-            $curTpl['battlegroup'] = CFG_BATTLEGROUP;
+            $curTpl['battlegroup'] = Cfg::get('BATTLEGROUP');
 
             // realm, rank
             $r = explode(':', $guid);
@@ -208,7 +210,7 @@ class RemoteArenaTeamList extends ArenaTeamList
             );
 
         // equalize subject distribution across realms
-        $limit = CFG_SQL_LIMIT_DEFAULT;
+        $limit = Cfg::get('SQL_LIMIT_DEFAULT');
         foreach ($conditions as $c)
             if (is_int($c))
                 $limit = $c;
@@ -244,7 +246,7 @@ class RemoteArenaTeamList extends ArenaTeamList
             foreach ($teams as $team)
                 $gladiators = array_merge($gladiators, array_keys($team));
 
-            $profiles[$realmId] = new RemoteProfileList(array(['c.guid', $gladiators], CFG_SQL_LIMIT_NONE), ['sv' => $realmId]);
+            $profiles[$realmId] = new RemoteProfileList(array(['c.guid', $gladiators], Cfg::get('SQL_LIMIT_NONE')), ['sv' => $realmId]);
 
             if (!$profiles[$realmId]->error)
                 $profiles[$realmId]->initializeLocalEntries();
@@ -312,7 +314,7 @@ class RemoteArenaTeamList extends ArenaTeamList
             }
 
             foreach (Util::createSqlBatchInsert($memberData) as $ins)
-                DB::Aowow()->query('INSERT IGNORE INTO ?_profiler_arena_team_member (?#) VALUES '.$ins, array_keys(reset($memberData)));
+                DB::Aowow()->query('INSERT INTO ?_profiler_arena_team_member (?#) VALUES '.$ins.' ON DUPLICATE KEY UPDATE `profileId` = `profileId`', array_keys(reset($memberData)));
         }
     }
 }
@@ -322,7 +324,7 @@ class LocalArenaTeamList extends ArenaTeamList
 {
     protected       $queryBase = 'SELECT at.*, at.id AS ARRAY_KEY FROM ?_profiler_arena_team at';
 
-    public function __construct($conditions = [], $miscData = null)
+    public function __construct(array $conditions = [], array $miscData = [])
     {
         parent::__construct($conditions, $miscData);
 
@@ -346,7 +348,7 @@ class LocalArenaTeamList extends ArenaTeamList
             }
 
             // battlegroup
-            $curTpl['battlegroup'] = CFG_BATTLEGROUP;
+            $curTpl['battlegroup'] = Cfg::get('BATTLEGROUP');
 
             $curTpl['members'] = $members[$id];
         }

@@ -24,7 +24,10 @@ class DB
     public static function connect($idx)
     {
         if (self::isConnected($idx))
-            return;
+        {
+            self::$interfaceCache[$idx]->link->close();
+            self::$interfaceCache[$idx] = null;
+        }
 
         $options = &self::$optionsCache[$idx];
         $interface = DbSimple_Generic::connect(self::createConnectSyntax($options));
@@ -79,7 +82,7 @@ class DB
         // make number sensible again
         $data['code'] = abs($data['code']);
 
-        if (defined('CFG_DEBUG') && CFG_DEBUG)
+        if (Cfg::get('DEBUG') >= CLI::LOG_INFO)
         {
             echo "\nDB ERROR\n";
             foreach ($data as $k => $v)
@@ -92,7 +95,7 @@ class DB
     public static function profiler($self, $query, $trace)
     {
         if ($trace)                                         // actual query
-            self::$logs[] = [substr(str_replace("\n", ' ', $query), 0, 200)];
+            self::$logs[] = [str_replace("\n", ' ', $query)];
         else                                                // the statistics
         {
             end(self::$logs);

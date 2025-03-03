@@ -41,7 +41,7 @@ class ItemsetsPage extends GenericPage
         if ($_ = $this->filterObj->getConditions())
             $conditions[] = $_;
 
-        $itemsets = new ItemsetList($conditions);
+        $itemsets = new ItemsetList($conditions, ['calcTotal' => true]);
         $this->extendGlobalData($itemsets->getJSGlobals());
 
         // recreate form selection
@@ -62,9 +62,9 @@ class ItemsetsPage extends GenericPage
             $tabData['extraCols'] = '$fi_getExtraCols(fi_extraCols, 0, 0)';
 
         // create note if search limit was exceeded
-        if ($itemsets->getMatches() > CFG_SQL_LIMIT_DEFAULT)
+        if ($itemsets->getMatches() > Cfg::get('SQL_LIMIT_DEFAULT'))
         {
-            $tabData['note'] = sprintf(Util::$tryFilteringString, 'LANG.lvnote_itemsetsfound', $itemsets->getMatches(), CFG_SQL_LIMIT_DEFAULT);
+            $tabData['note'] = sprintf(Util::$tryFilteringString, 'LANG.lvnote_itemsetsfound', $itemsets->getMatches(), Cfg::get('SQL_LIMIT_DEFAULT'));
             $tabData['_truncated'] = 1;
         }
 

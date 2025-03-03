@@ -22,24 +22,17 @@ class ItemsetList extends BaseType
                         'src' => ['j' => ['?_source src ON `src`.`typeId` = `set`.`id` AND `src`.`type` = 4', true], 's' => ', src1, src2, src3, src4, src5, src6, src7, src8, src9, src10, src11, src12, src13, src14, src15, src16, src17, src18, src19, src20, src21, src22, src23, src24']
                     );
 
-    public function __construct($conditions = [])
+    public function __construct(array $conditions = [], array $miscData = [])
     {
-        parent::__construct($conditions);
+        parent::__construct($conditions, $miscData);
 
         // post processing
         foreach ($this->iterate() as &$_curTpl)
         {
-            $_curTpl['classes'] = [];
-            $_curTpl['pieces']  = [];
-            for ($i = 1; $i < 12; $i++)
-            {
-                if ($_curTpl['classMask'] & (1 << ($i - 1)))
-                {
-                    $this->classes[] = $i;
-                    $_curTpl['classes'][] = $i;
-                }
-            }
+            $_curTpl['classes'] = ChrClass::fromMask($_curTpl['classMask']);
+            $this->classes = array_merge($this->classes, $_curTpl['classes']);
 
+            $_curTpl['pieces']  = [];
             for ($i = 1; $i < 10; $i++)
             {
                 if ($piece = $_curTpl['item'.$i])
@@ -113,7 +106,7 @@ class ItemsetList extends BaseType
         if ($_ = $this->getField('contentGroup'))
             $x .= Lang::itemset('notes', $_).($this->getField('heroic') ? ' <i class="q2">('.Lang::item('heroic').')</i>' : '').'<br />';
 
-        if (!$nCl || !$this->getField('contentGroup'))
+        if (!$nCl || !$this->getField('type'))
             $x.= Lang::itemset('types', $this->getField('type')).'<br />';
 
         if ($bonuses = $this->getBonuses())
@@ -177,31 +170,31 @@ class ItemsetListFilter extends Filter
     );
 
     protected $genericFilter = array(
-         2 => [FILTER_CR_NUMERIC,  'id',          NUM_CAST_INT,         true], // id
-         3 => [FILTER_CR_NUMERIC,  'npieces',     NUM_CAST_INT              ], // pieces
-         4 => [FILTER_CR_STRING,   'bonusText',   STR_LOCALIZED             ], // bonustext
-         5 => [FILTER_CR_BOOLEAN,  'heroic'                                 ], // heroic
-         6 => [FILTER_CR_ENUM,     'e.holidayId', true,                 true], // relatedevent
-         8 => [FILTER_CR_FLAG,     'cuFlags',     CUSTOM_HAS_COMMENT        ], // hascomments
-         9 => [FILTER_CR_FLAG,     'cuFlags',     CUSTOM_HAS_SCREENSHOT     ], // hasscreenshots
-        10 => [FILTER_CR_FLAG,     'cuFlags',     CUSTOM_HAS_VIDEO          ], // hasvideos
-        12 => [FILTER_CR_CALLBACK, 'cbAvaliable',                           ]  // available to players [yn]
+         2 => [parent::CR_NUMERIC,  'id',          NUM_CAST_INT,         true], // id
+         3 => [parent::CR_NUMERIC,  'npieces',     NUM_CAST_INT              ], // pieces
+         4 => [parent::CR_STRING,   'bonusText',   STR_LOCALIZED             ], // bonustext
+         5 => [parent::CR_BOOLEAN,  'heroic'                                 ], // heroic
+         6 => [parent::CR_ENUM,     'e.holidayId', true,                 true], // relatedevent
+         8 => [parent::CR_FLAG,     'cuFlags',     CUSTOM_HAS_COMMENT        ], // hascomments
+         9 => [parent::CR_FLAG,     'cuFlags',     CUSTOM_HAS_SCREENSHOT     ], // hasscreenshots
+        10 => [parent::CR_FLAG,     'cuFlags',     CUSTOM_HAS_VIDEO          ], // hasvideos
+        12 => [parent::CR_CALLBACK, 'cbAvaliable',                           ]  // available to players [yn]
     );
 
     protected $inputFields = array(
-        'cr'    => [FILTER_V_RANGE, [2, 12],                                       true ], // criteria ids
-        'crs'   => [FILTER_V_LIST,  [FILTER_ENUM_NONE, FILTER_ENUM_ANY, [0, 424]], true ], // criteria operators
-        'crv'   => [FILTER_V_REGEX, parent::PATTERN_CRV,                           true ], // criteria values - only printable chars, no delimiters
-        'na'    => [FILTER_V_REGEX, parent::PATTERN_NAME,                          false], // name / description - only printable chars, no delimiter
-        'ma'    => [FILTER_V_EQUAL, 1,                                             false], // match any / all filter
-        'qu'    => [FILTER_V_RANGE, [0, 7],                                        true ], // quality
-        'ty'    => [FILTER_V_RANGE, [1, 12],                                       true ], // set type
-        'minle' => [FILTER_V_RANGE, [1, 999],                                      false], // min item level
-        'maxle' => [FILTER_V_RANGE, [1, 999],                                      false], // max itemlevel
-        'minrl' => [FILTER_V_RANGE, [1, MAX_LEVEL],                                false], // min required level
-        'maxrl' => [FILTER_V_RANGE, [1, MAX_LEVEL],                                false], // max required level
-        'cl'    => [FILTER_V_LIST,  [[1, 9], 11],                                  false], // class
-        'ta'    => [FILTER_V_RANGE, [1, 30],                                       false]  // tag / content group
+        'cr'    => [parent::V_RANGE, [2, 12],                                         true ], // criteria ids
+        'crs'   => [parent::V_LIST,  [parent::ENUM_NONE, parent::ENUM_ANY, [0, 424]], true ], // criteria operators
+        'crv'   => [parent::V_REGEX, parent::PATTERN_CRV,                             true ], // criteria values - only printable chars, no delimiters
+        'na'    => [parent::V_REGEX, parent::PATTERN_NAME,                            false], // name / description - only printable chars, no delimiter
+        'ma'    => [parent::V_EQUAL, 1,                                               false], // match any / all filter
+        'qu'    => [parent::V_RANGE, [0, 7],                                          true ], // quality
+        'ty'    => [parent::V_RANGE, [1, 12],                                         true ], // set type
+        'minle' => [parent::V_RANGE, [1, 999],                                        false], // min item level
+        'maxle' => [parent::V_RANGE, [1, 999],                                        false], // max itemlevel
+        'minrl' => [parent::V_RANGE, [1, MAX_LEVEL],                                  false], // min required level
+        'maxrl' => [parent::V_RANGE, [1, MAX_LEVEL],                                  false], // max required level
+        'cl'    => [parent::V_LIST,  [[1, 9], 11],                                    false], // class
+        'ta'    => [parent::V_RANGE, [1, 30],                                         false]  // tag / content group
     );
 
     protected function createSQLForValues()
@@ -211,7 +204,7 @@ class ItemsetListFilter extends Filter
 
         // name [str]
         if (isset($_v['na']))
-            if ($_ = $this->modularizeString(['name_loc'.User::$localeId]))
+            if ($_ = $this->modularizeString(['name_loc'.Lang::getLocale()->value]))
                 $parts[] = $_;
 
         // quality [enum]

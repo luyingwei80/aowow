@@ -38,7 +38,7 @@
                     <table align="center">
                         <tr>
                             <td align="right"><?=Lang::account('user').Lang::main('colon'); ?></td>
-                            <td><input type="text" name="username" value="<?=$this->user; ?>" maxlength="16" id="username-generic" style="width: 10em" /></td>
+                            <td><input type="text" name="username" value="<?=$this->user; ?>" id="username-generic" style="width: 10em" /></td>
                         </tr>
                         <tr>
                             <td align="right"><?=Lang::account('pass').Lang::main('colon'); ?></td>
@@ -61,7 +61,7 @@
 
             <div class="pad3"></div>
 <?php
-if (CFG_ACC_ALLOW_REGISTER):
+if (Cfg::get('ACC_ALLOW_REGISTER')):
     echo '            <div style="text-align: center; line-height: 1.5em; font-size: 125%">'.Lang::account('accCreate')."</div>\n";
 endif;
 ?>

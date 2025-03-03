@@ -19,7 +19,7 @@ class EventPage extends GenericPage
     protected $tabId         = 0;
     protected $mode          = CACHE_TYPE_PAGE;
 
-    protected $_get          = ['domain' => ['filter' => FILTER_CALLBACK, 'options' => 'GenericPage::checkDomain']];
+    protected $_get          = ['domain' => ['filter' => FILTER_CALLBACK, 'options' => 'Locale::tryFromDomain']];
 
     private   $powerTpl      = '$WowheadPower.registerHoliday(%d, %d, %s);';
     private   $hId           = 0;
@@ -31,7 +31,7 @@ class EventPage extends GenericPage
 
         // temp locale
         if ($this->mode == CACHE_TYPE_TOOLTIP && $this->_get['domain'])
-            Util::powerUseLocale($this->_get['domain']);
+            Lang::load($this->_get['domain']);
 
         $this->typeId = intVal($id);
 
@@ -190,7 +190,10 @@ class EventPage extends GenericPage
 
                 $questItems = [];
                 foreach (array_column($quests->rewards, Type::ITEM) as $arr)
-                    $questItems = array_merge($questItems, $arr);
+                    $questItems = array_merge($questItems, array_keys($arr));
+
+                foreach (array_column($quests->choices, Type::ITEM) as $arr)
+                    $questItems = array_merge($questItems, array_keys($arr));
 
                 foreach (array_column($quests->requires, Type::ITEM) as $arr)
                     $questItems = array_merge($questItems, $arr);
@@ -244,21 +247,16 @@ class EventPage extends GenericPage
                 $this->extendGlobalData($relEvents->getJSGlobals());
                 $relData   = $relEvents->getListviewData();
                 foreach ($relEvents->getFoundIDs() as $id)
-                    $relData[$id]['condition'][0][$this->typeId][] = [[-CND_ACTIVE_EVENT, $this->eId]];
+                    Conditions::extendListviewRow($relData[$id], Conditions::SRC_NONE, $this->typeId, [-Conditions::ACTIVE_EVENT, $this->eId]);
 
                 $this->extendGlobalData($this->subject->getJSGlobals());
+                $d = $this->subject->getListviewData();
                 foreach ($rel as $r)
-                {
-                    if ($r <= 0)
-                        continue;
+                    if ($r > 0)
+                        if (Conditions::extendListviewRow($d[$this->eId], Conditions::SRC_NONE, $this->typeId, [-Conditions::ACTIVE_EVENT, $r]))
+                            $this->extendGlobalIds(Type::WORLDEVENT, $r);
 
-                    $this->extendGlobalIds(Type::WORLDEVENT, $r);
-
-                    $d = $this->subject->getListviewData();
-                    $d[$this->eId]['condition'][0][$this->typeId][] = [[-CND_ACTIVE_EVENT, $r]];
-
-                    $relData = array_merge($relData, $d);
-                }
+                $relData = array_merge($relData, $d);
 
                 $this->lvTabs[] = [WorldEventList::$brickFile, array(
                     'data'       => array_values($relData),
@@ -269,6 +267,15 @@ class EventPage extends GenericPage
                 )];
             }
         }
+
+        // tab: condition for
+        $cnd = new Conditions();
+        $cnd->getByCondition(Type::WORLDEVENT, $this->typeId)->prepare();
+        if ($tab = $cnd->toListviewTab('condition-for', '$LANG.tab_condition_for'))
+        {
+            $this->extendGlobalData($cnd->getJsGlobals());
+            $this->lvTabs[] = $tab;
+        }
     }
 
     protected function generateTooltip() : string
@@ -276,15 +283,15 @@ class EventPage extends GenericPage
         $power = new StdClass();
         if (!$this->subject->error)
         {
-            $power->{'name_'.User::$localeString} = $this->subject->getField('name', true);
+            $power->{'name_'.Lang::getLocale()->json()} = $this->subject->getField('name', true);
 
             if ($this->subject->getField('iconString') != 'trade_engineering')
                 $power->icon = rawurlencode($this->subject->getField('iconString', true, true));
 
-            $power->{'tooltip_'.User::$localeString} = $this->subject->renderTooltip();
+            $power->{'tooltip_'.Lang::getLocale()->json()} = $this->subject->renderTooltip();
         }
 
-        return sprintf($this->powerTpl, $this->typeId, User::$localeId, Util::toJSON($power, JSON_AOWOW_POWER));
+        return sprintf($this->powerTpl, $this->typeId, Lang::getLocale()->value, Util::toJSON($power, JSON_AOWOW_POWER));
     }
 
     protected function postCache()
@@ -302,7 +309,7 @@ class EventPage extends GenericPage
         else
         {
             if ($this->hId)
-                $this->wowheadLink = sprintf(WOWHEAD_LINK, Util::$subDomains[User::$localeId], 'event', $this->hId);
+                $this->wowheadLink = sprintf(WOWHEAD_LINK, Lang::getLocale()->domain(), 'event', $this->hId);
 
             /********************/
             /* finalize infobox */
@@ -343,7 +350,6 @@ class EventPage extends GenericPage
                     $data['endDate']   = $updated['end']   ? date(Util::$dateFormatInternal, $updated['end'])   : false;
                     $data['rec']       = $updated['rec'];
                 }
-
             }
         }
     }

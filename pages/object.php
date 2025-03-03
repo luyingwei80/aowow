@@ -21,7 +21,7 @@ class ObjectPage extends GenericPage
     protected $mode          = CACHE_TYPE_PAGE;
     protected $scripts       = [[SC_JS_FILE, 'js/swfobject.js']];
 
-    protected $_get          = ['domain' => ['filter' => FILTER_CALLBACK, 'options' => 'GenericPage::checkDomain']];
+    protected $_get          = ['domain' => ['filter' => FILTER_CALLBACK, 'options' => 'Locale::tryFromDomain']];
 
     private   $powerTpl      = '$WowheadPower.registerObject(%d, %d, %s);';
 
@@ -31,7 +31,7 @@ class ObjectPage extends GenericPage
 
         // temp locale
         if ($this->mode == CACHE_TYPE_TOOLTIP && $this->_get['domain'])
-            Util::powerUseLocale($this->_get['domain']);
+            Lang::load($this->_get['domain']);
 
         $this->typeId = intVal($id);
 
@@ -230,16 +230,16 @@ class ObjectPage extends GenericPage
 
 
         $relBoss = null;
-        if ($ll = DB::Aowow()->selectRow('SELECT * FROM ?_loot_link WHERE objectId = ?d ORDER BY priority DESC LIMIT 1', $this->typeId))
+        if ($ll = DB::Aowow()->selectRow('SELECT * FROM ?_loot_link WHERE `objectId` = ?d ORDER BY `priority` DESC LIMIT 1', $this->typeId))
         {
             // group encounter
             if ($ll['encounterId'])
                 $relBoss = [$ll['npcId'], Lang::profiler('encounterNames', $ll['encounterId'])];
             // difficulty dummy
-            else if ($c = DB::Aowow()->selectRow('SELECT id, name_loc0, name_loc2, name_loc3, name_loc6, name_loc8 FROM ?_creature WHERE difficultyEntry1 = ?d OR difficultyEntry2 = ?d OR difficultyEntry3 = ?d', abs($ll['npcId']), abs($ll['npcId']), abs($ll['npcId'])))
+            else if ($c = DB::Aowow()->selectRow('SELECT `id`, `name_loc0`, `name_loc2`, `name_loc3`, `name_loc4`, `name_loc6`, `name_loc8` FROM ?_creature WHERE `difficultyEntry1` = ?d OR `difficultyEntry2` = ?d OR `difficultyEntry3` = ?d', $ll['npcId'], $ll['npcId'], $ll['npcId']))
                 $relBoss = [$c['id'], Util::localizedString($c, 'name')];
             // base creature
-            else if ($c = DB::Aowow()->selectRow('SELECT id, name_loc0, name_loc2, name_loc3, name_loc6, name_loc8 FROM ?_creature WHERE id = ?d', abs($ll['npcId'])))
+            else if ($c = DB::Aowow()->selectRow('SELECT `id`, `name_loc0`, `name_loc2`, `name_loc3`, `name_loc4`, `name_loc6`, `name_loc8` FROM ?_creature WHERE `id` = ?d', $ll['npcId']))
                 $relBoss = [$c['id'], Util::localizedString($c, 'name')];
         }
 
@@ -247,14 +247,14 @@ class ObjectPage extends GenericPage
         $sai = null;
         if ($this->subject->getField('ScriptOrAI') == 'SmartGameObjectAI')
         {
-            $sai = new SmartAI(SAI_SRC_TYPE_OBJECT, $this->typeId, ['name' => $this->subject->getField('name', true)]);
+            $sai = new SmartAI(SmartAI::SRC_TYPE_OBJECT, $this->typeId);
             if (!$sai->prepare())                           // no smartAI found .. check per guid
             {
                 // at least one of many
-                $guids = DB::World()->selectCol('SELECT guid FROM gameobject WHERE id = ?d LIMIT 1', $this->typeId);
+                $guids = DB::World()->selectCol('SELECT `guid` FROM gameobject WHERE `id` = ?d', $this->typeId);
                 while ($_ = array_pop($guids))
                 {
-                    $sai = new SmartAI(SAI_SRC_TYPE_OBJECT, -$_, ['name' => $this->subject->getField('name', true), 'title' => ' [small](for GUID: '.$_.')[/small]']);
+                    $sai = new SmartAI(SmartAI::SRC_TYPE_OBJECT, -$_, ['title' => ' [small](for GUID: '.$_.')[/small]']);
                     if ($sai->prepare())
                         break;
                 }
@@ -386,7 +386,6 @@ class ObjectPage extends GenericPage
         }
 
         // tab: contains
-        $reqQuest = [];
         if ($_ = $this->subject->getField('lootId'))
         {
             $goLoot = new Loot();
@@ -397,24 +396,18 @@ class ObjectPage extends GenericPage
                 $hiddenCols  = ['source', 'side', 'slot', 'reqlevel'];
 
                 $this->extendGlobalData($goLoot->jsGlobals);
+                $lootResult = $goLoot->getResult();
 
-                foreach ($goLoot->iterate() as &$lv)
+                foreach ($hiddenCols as $k => $str)
                 {
-                    if (!empty($hiddenCols))
-                        foreach ($hiddenCols as $k => $str)
-                            if (!empty($lv[$str]))
-                                unset($hiddenCols[$k]);
-
-                    if (!$lv['quest'])
-                        continue;
-
-                    $extraCols[] = '$Listview.extraCols.condition';
-                    $reqQuest[$lv['id']] = 0;
-                    $lv['condition'][0][$this->typeId][] = [[CND_QUESTTAKEN, &$reqQuest[$lv['id']]]];
+                    if ($k == 1 && array_filter(array_column($lootResult, $str), function ($x) { return $x != SIDE_BOTH; }))
+                        unset($hiddenCols[$k]);
+                    else if ($k != 1 && array_column($lootResult, $str))
+                        unset($hiddenCols[$k]);
                 }
 
                 $tabData = array(
-                    'data'      => array_values($goLoot->getResult()),
+                    'data'      => array_values($lootResult),
                     'id'        => 'contains',
                     'name'      => '$LANG.tab_contains',
                     'sort'      => ['-percent', 'name'],
@@ -422,40 +415,16 @@ class ObjectPage extends GenericPage
                 );
 
                 if ($hiddenCols)
-                    $tabData['hiddenCols'] = $hiddenCols;
+                    $tabData['hiddenCols'] = array_values($hiddenCols);
 
                 $this->lvTabs[] = [ItemList::$brickFile, $tabData];
-            }
-        }
-
-        if ($reqIds = array_keys($reqQuest))                    // apply quest-conditions as back-reference
-        {
-            $conditions = array(
-                'OR',
-                ['reqSourceItemId1', $reqIds], ['reqSourceItemId2', $reqIds],
-                ['reqSourceItemId3', $reqIds], ['reqSourceItemId4', $reqIds],
-                ['reqItemId1', $reqIds], ['reqItemId2', $reqIds], ['reqItemId3', $reqIds],
-                ['reqItemId4', $reqIds], ['reqItemId5', $reqIds], ['reqItemId6', $reqIds]
-            );
-
-            $reqQuests = new QuestList($conditions);
-            $this->extendGlobalData($reqQuests->getJSGlobals());
-
-            foreach ($reqQuests->iterate() as $qId => $__)
-            {
-                if (empty($reqQuests->requires[$qId][Type::ITEM]))
-                    continue;
-
-                foreach ($reqIds as $rId)
-                    if (in_array($rId, $reqQuests->requires[$qId][Type::ITEM]))
-                        $reqQuest[$rId] = $reqQuests->id;
             }
         }
 
         // tab: Spell Focus for
         if ($sfId = $this->subject->getField('spellFocusId'))
         {
-            $focusSpells = new SpellList(array(['spellFocusObject', $sfId]));
+            $focusSpells = new SpellList(array(['spellFocusObject', $sfId]), ['calcTotal' => true]);
             if (!$focusSpells->error)
             {
                 $tabData = array(
@@ -467,9 +436,9 @@ class ObjectPage extends GenericPage
                 $this->extendGlobalData($focusSpells->getJSGlobals(GLOBALINFO_SELF | GLOBALINFO_RELATED));
 
                 // create note if search limit was exceeded
-                if ($focusSpells->getMatches() > CFG_SQL_LIMIT_DEFAULT)
+                if ($focusSpells->getMatches() > Cfg::get('SQL_LIMIT_DEFAULT'))
                 {
-                    $tabData['note']  = sprintf(Util::$tryNarrowingString, 'LANG.lvnote_spellsfound', $focusSpells->getMatches(), CFG_SQL_LIMIT_DEFAULT);
+                    $tabData['note']  = sprintf(Util::$tryNarrowingString, 'LANG.lvnote_spellsfound', $focusSpells->getMatches(), Cfg::get('SQL_LIMIT_DEFAULT'));
                     $tabData['_truncated'] = 1;
                 }
 
@@ -503,6 +472,15 @@ class ObjectPage extends GenericPage
                 'id'   => 'same-model-as'
             )];
         }
+
+        // tab: condition-for
+        $cnd = new Conditions();
+        $cnd->getByCondition(Type::OBJECT, $this->typeId)->prepare();
+        if ($tab = $cnd->toListviewTab('condition-for', '$LANG.tab_condition_for'))
+        {
+            $this->extendGlobalData($cnd->getJsGlobals());
+            $this->lvTabs[] = $tab;
+        }
     }
 
     protected function generateTooltip()
@@ -510,12 +488,12 @@ class ObjectPage extends GenericPage
         $power = new StdClass();
         if (!$this->subject->error)
         {
-            $power->{'name_'.User::$localeString}    = Lang::unescapeUISequences($this->subject->getField('name', true), Lang::FMT_RAW);
-            $power->{'tooltip_'.User::$localeString} = $this->subject->renderTooltip();
+            $power->{'name_'.Lang::getLocale()->json()}    = Lang::unescapeUISequences($this->subject->getField('name', true), Lang::FMT_RAW);
+            $power->{'tooltip_'.Lang::getLocale()->json()} = $this->subject->renderTooltip();
             $power->map                              = $this->subject->getSpawns(SPAWNINFO_SHORT);
         }
 
-        return sprintf($this->powerTpl, $this->typeId, User::$localeId, Util::toJSON($power, JSON_AOWOW_POWER));
+        return sprintf($this->powerTpl, $this->typeId, Lang::getLocale()->value, Util::toJSON($power, JSON_AOWOW_POWER));
     }
 }
 

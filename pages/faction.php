@@ -173,7 +173,7 @@ class FactionPage extends GenericPage
         /**************/
 
         // tab: items
-        $items = new ItemList(array(['requiredFaction', $this->typeId]));
+        $items = new ItemList(array(['requiredFaction', $this->typeId]), ['calcTotal' => true]);
         if (!$items->error)
         {
             $this->extendGlobalData($items->getJSGlobals(GLOBALINFO_SELF));
@@ -184,7 +184,7 @@ class FactionPage extends GenericPage
                 'sort'      => ['standing', 'name']
             );
 
-            if ($items->getMatches() > CFG_SQL_LIMIT_DEFAULT)
+            if ($items->getMatches() > Cfg::get('SQL_LIMIT_DEFAULT'))
                 $tabData['note'] = sprintf(Util::$filterResultString, '?items&filter=cr=17;crs='.$this->typeId.';crv=0');
 
             $this->lvTabs[] = [ItemList::$brickFile, $tabData, 'itemStandingCol'];
@@ -204,7 +204,7 @@ class FactionPage extends GenericPage
 
             if ($cRep)
             {
-                $killCreatures = new CreatureList(array(['id', array_keys($cRep)]));
+                $killCreatures = new CreatureList(array(['id', array_keys($cRep)]), ['calcTotal' => true]);
                 if (!$killCreatures->error)
                 {
                     $data = $killCreatures->getListviewData();
@@ -217,7 +217,7 @@ class FactionPage extends GenericPage
                         'sort'      => ['-reputation', 'name']
                     );
 
-                    if ($killCreatures->getMatches() > CFG_SQL_LIMIT_DEFAULT)
+                    if ($killCreatures->getMatches() > Cfg::get('SQL_LIMIT_DEFAULT'))
                         $tabData['note'] = sprintf(Util::$filterResultString, '?npcs&filter=cr=42;crs='.$this->typeId.';crv=0');
 
                     $this->lvTabs[] = [CreatureList::$brickFile, $tabData, 'npcRepCol'];
@@ -228,7 +228,7 @@ class FactionPage extends GenericPage
         // tab: members
         if ($_ = $this->subject->getField('templateIds'))
         {
-            $members = new CreatureList(array(['faction', $_]));
+            $members = new CreatureList(array(['faction', $_]), ['calcTotal' => true]);
             if (!$members->error)
             {
                 $tabData = array(
@@ -237,7 +237,7 @@ class FactionPage extends GenericPage
                     'name' => '$LANG.tab_members'
                 );
 
-                if ($members->getMatches() > CFG_SQL_LIMIT_DEFAULT)
+                if ($members->getMatches() > Cfg::get('SQL_LIMIT_DEFAULT'))
                     $tabData['note'] = sprintf(Util::$filterResultString, '?npcs&filter=cr=3;crs='.$this->typeId.';crv=0');
 
                 $this->lvTabs[] = [CreatureList::$brickFile, $tabData];
@@ -261,7 +261,7 @@ class FactionPage extends GenericPage
             ['AND', ['rewardFactionId5', $this->typeId], ['rewardFactionValue5', 0, '>']],
             'OR'
         );
-        $quests = new QuestList($conditions);
+        $quests = new QuestList($conditions, ['calcTotal' => true]);
         if (!$quests->error)
         {
             $this->extendGlobalData($quests->getJSGlobals(GLOBALINFO_ANY));
@@ -271,7 +271,7 @@ class FactionPage extends GenericPage
                 'extraCols' => '$_'
             );
 
-            if ($quests->getMatches() > CFG_SQL_LIMIT_DEFAULT)
+            if ($quests->getMatches() > Cfg::get('SQL_LIMIT_DEFAULT'))
                 $tabData['note'] = sprintf(Util::$filterResultString, '?quests&filter=cr=1;crs='.$this->typeId.';crv=0');
 
             $this->lvTabs[] = [QuestList::$brickFile, $tabData, 'questRepCol'];
@@ -293,6 +293,15 @@ class FactionPage extends GenericPage
                 'name'        => '$LANG.tab_criteriaof',
                 'visibleCols' => ['category']
             )];
+        }
+
+        // tab: condition-for
+        $cnd = new Conditions();
+        $cnd->getByCondition(Type::FACTION, $this->typeId)->prepare();
+        if ($tab = $cnd->toListviewTab('condition-for', '$LANG.tab_condition_for'))
+        {
+            $this->extendGlobalData($cnd->getJsGlobals());
+            $this->lvTabs[] = $tab;
         }
     }
 }

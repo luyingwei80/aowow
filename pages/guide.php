@@ -30,7 +30,6 @@ class GuidePage extends GenericPage
     protected /* string */ $author        = '';
     protected /* array */  $gPageInfo     = [];
     protected /* int */    $show          = self::SHOW_GUIDE;
-    protected /* int */    $articleUrl    = '';
 
     private   /* array */  $validCats     = [1, 2, 3, 4, 5, 6, 7, 8, 9];
     private   /* string */ $extra         = '';
@@ -59,8 +58,6 @@ class GuidePage extends GenericPage
 
     public function __construct($pageCall, $pageParam)
     {
-        $this->contribute = CONTRIBUTE_CO;
-
         $guide = explode( "&", $pageParam, 2);
 
         parent::__construct($pageCall, $pageParam);
@@ -183,7 +180,7 @@ class GuidePage extends GenericPage
     {
         // init required template vars
         $this->editorFields = array(
-            'locale' => User::$localeId,
+            'locale' => Lang::getLocale()->value,
             'status' => GUIDE_STATUS_DRAFT
         );
     }
@@ -482,13 +479,13 @@ class GuidePage extends GenericPage
                 return false;
 
             // req: valid data
-            if (!in_array($this->_post['category'], $this->validCats) || !(CFG_LOCALES & (1 << $this->_post['locale'])))
+            if (!in_array($this->_post['category'], $this->validCats) || !(Cfg::get('LOCALES') & (1 << $this->_post['locale'])))
                 return false;
 
             // sanitize: spec / class
             if ($this->_post['category'] == 1)              // Classes
             {
-                if ($this->_post['classId'] && !((1 << $this->_post['classId']) & CLASS_MASK_ALL))
+                if ($this->_post['classId'] && !ChrClass::tryFrom($this->_post['classId']))
                     $this->_post['classId'] = 0;
 
                 if (!in_array($this->_post['specId'], [-1, 0, 1, 2]))
@@ -525,11 +522,11 @@ class GuidePage extends GenericPage
         $power = new StdClass();
         if (!$this->subject->error)
         {
-            $power->{'name_'.User::$localeString}    = strip_tags($this->name);
-            $power->{'tooltip_'.User::$localeString} = $this->subject->renderTooltip();
+            $power->{'name_'.Lang::getLocale()->json()}    = strip_tags($this->name);
+            $power->{'tooltip_'.Lang::getLocale()->json()} = $this->subject->renderTooltip();
         }
 
-        return sprintf($this->powerTpl, Util::toJSON($this->articleUrl ?: $this->typeId), User::$localeId, Util::toJSON($power, JSON_AOWOW_POWER));
+        return sprintf($this->powerTpl, Util::toJSON($this->articleUrl ?: $this->typeId), Lang::getLocale()->value, Util::toJSON($power, JSON_AOWOW_POWER));
     }
 
     protected function generatePath() : void
@@ -558,7 +555,7 @@ class GuidePage extends GenericPage
     protected static function checkDescription(string $str) : string
     {
         // run checkTextBlob and also replace \n => \s and \s+ => \s
-        $str = preg_replace(parent::$PATTERN_TEXT_BLOB, '', $str);
+        $str = preg_replace(parent::PATTERN_TEXT_BLOB, '', $str);
 
         $str = strtr($str, ["\n" => ' ', "\r" => ' ']);
 

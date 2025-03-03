@@ -29,21 +29,6 @@ class Game
          1 => ['ability_rogue_eviscerate',        'ability_warrior_innerrage',       'ability_warrior_defensivestance'  ]
     );
 
-    public static $classFileStrings         = array(
-        null,   'warrior', 'paladin', 'hunter', 'rogue', 'priest', 'deathknight', 'shaman', 'mage', 'warlock', null, 'druid'
-    );
-
-    private static $combatRatingToItemMod    = array(        // zero-indexed idx:CR; val:Mod
-        null,           12,             13,             14,             15,             16,             17,             18,             19,
-        20,             21,             22,             23,             24,             25,             26,             27,             28,
-        29,             30,             null,           null,           null,           37,             44
-    );
-
-    public static $lvlIndepRating           = array(        // rating doesn't scale with level
-        ITEM_MOD_MANA,                  ITEM_MOD_HEALTH,                ITEM_MOD_ATTACK_POWER,          ITEM_MOD_MANA_REGENERATION,     ITEM_MOD_SPELL_POWER,
-        ITEM_MOD_HEALTH_REGEN,          ITEM_MOD_SPELL_PENETRATION,     ITEM_MOD_BLOCK_VALUE
-    );
-
     public static $questClasses             = array(
         -2 =>  [    0],
          0 =>  [    1,     3,     4,     8,     9,    10,    11,    12,    25,    28,    33,    36,    38,    40,    41,    44,    45,    46,    47,    51,    85,   130,   132,   139,   154,   267,  1497,  1519,  1537,  2257,  3430,  3431,  3433,  3487,  4080,  4298],
@@ -146,72 +131,10 @@ class Game
         'meta',                         'red',                          'yellow',                       'blue'
     );
 
-    // 'replicates' $WH.g_statToJson
-    public static $itemMods                 = array(        // zero-indexed; "mastrtng": unused mastery; _[a-z] => taken mods..
-        'dmg',              'mana',             'health',           'agi',              'str',              'int',              'spi',
-        'sta',              'energy',           'rage',             'focus',            'runicpwr',         'defrtng',          'dodgertng',
-        'parryrtng',        'blockrtng',        'mlehitrtng',       'rgdhitrtng',       'splhitrtng',       'mlecritstrkrtng',  'rgdcritstrkrtng',
-        'splcritstrkrtng',  '_mlehitrtng',      '_rgdhitrtng',      '_splhitrtng',      '_mlecritstrkrtng', '_rgdcritstrkrtng', '_splcritstrkrtng',
-        'mlehastertng',     'rgdhastertng',     'splhastertng',     'hitrtng',          'critstrkrtng',     '_hitrtng',         '_critstrkrtng',
-        'resirtng',         'hastertng',        'exprtng',          'atkpwr',           'rgdatkpwr',        'feratkpwr',        'splheal',
-        'spldmg',           'manargn',          'armorpenrtng',     'splpwr',           'healthrgn',        'splpen',           'block',                                          // ITEM_MOD_BLOCK_VALUE
-        'mastrtng',         'armor',            'firres',           'frores',           'holres',           'shares',           'natres',
-        'arcres',           'firsplpwr',        'frosplpwr',        'holsplpwr',        'shasplpwr',        'natsplpwr',        'arcsplpwr'
-    );
-
     public static $class2SpellFamily        = array(
     //  null    Warrior Paladin Hunter  Rogue   Priest  DK      Shaman  Mage    Warlock null    Druid
         null,   4,      10,     9,      8,      6,      15,     11,     3,      5,      null,   7
     );
-
-    public static $areaFloors               = array(
-         206 => 3,  209 => 7,  719 => 3,  721 => 4,  796 => 4, 1196 => 2, 1337 => 2,  1581 => 2, 1583 => 7, 1584 => 2,
-        2017 => 2, 2057 => 4, 2100 => 2, 2557 => 6, 2677 => 4, 3428 => 3, 3457 => 17, 3790 => 2, 3791 => 2, 3959 => 8,
-        3456 => 6, 3715 => 2, 3848 => 3, 3849 => 2, 4075 => 2, 4100 => 2, 4131 => 2,  4196 => 2, 4228 => 4, 4272 => 2,
-        4273 => 6, 4277 => 3, 4395 => 2, 4494 => 2, 4722 => 2, 4812 => 8
-    );
-
-    public static function itemModByRatingMask($mask)
-    {
-        if (($mask & 0x1C000) == 0x1C000)                   // special case resilience
-            return ITEM_MOD_RESILIENCE_RATING;
-
-        if (($mask & 0x00E0) == 0x00E0)                     // hit rating - all subcats (mle, rgd, spl)
-            return ITEM_MOD_HIT_RATING;
-
-        if (($mask & 0x0700) == 0x0700)                     // crit rating - all subcats (mle, rgd, spl)
-            return ITEM_MOD_CRIT_RATING;
-
-        for ($j = 0; $j < count(self::$combatRatingToItemMod); $j++)
-        {
-            if (!self::$combatRatingToItemMod[$j])
-                continue;
-
-            if (!($mask & (1 << $j)))
-                continue;
-
-            return self::$combatRatingToItemMod[$j];
-        }
-
-        return 0;
-    }
-
-    public static function sideByRaceMask($race)
-    {
-        // Any
-        if (!$race || ($race & RACE_MASK_ALL) == RACE_MASK_ALL)
-            return SIDE_BOTH;
-
-        // Horde
-        if ($race & RACE_MASK_HORDE && !($race & RACE_MASK_ALLIANCE))
-            return SIDE_HORDE;
-
-        // Alliance
-        if ($race & RACE_MASK_ALLIANCE && !($race & RACE_MASK_HORDE))
-            return SIDE_ALLIANCE;
-
-        return SIDE_BOTH;
-    }
 
     public static function getReputationLevelForPoints($pts)
     {
@@ -276,7 +199,7 @@ class Game
         $pages = [];
         while ($ptId)
         {
-            if ($row = DB::World()->selectRow('SELECT ptl.Text AS Text_loc?d, pt.* FROM page_text pt LEFT JOIN page_text_locale ptl ON pt.ID = ptl.ID AND locale = ? WHERE pt.ID = ?d', User::$localeId, User::$localeString, $ptId))
+            if ($row = DB::World()->selectRow('SELECT ptl.Text AS Text_loc?d, pt.* FROM page_text pt LEFT JOIN page_text_locale ptl ON pt.ID = ptl.ID AND locale = ? WHERE pt.ID = ?d', Lang::getLocale()->value, Lang::getLocale()->json(), $ptId))
             {
                 $ptId = $row['NextPageID'];
                 $pages[] = Util::parseHtmlText(Util::localizedString($row, 'Text'));
@@ -300,7 +223,7 @@ class Game
 
     private static function alphaMapCheck(int $areaId, array &$set) : bool
     {
-        $file = 'setup/generated/alphaMaps/'.$areaId.'.png';
+        $file = 'cache/alphaMaps/'.$areaId.'.png';
         if (!file_exists($file))                            // file does not exist (probably instanced area)
             return false;
 
@@ -312,7 +235,7 @@ class Game
         }
 
         if (empty(self::$alphaMapCache[$areaId]))
-        self::$alphaMapCache[$areaId] = imagecreatefrompng($file);
+            self::$alphaMapCache[$areaId] = imagecreatefrompng($file);
 
         // alphaMaps are 1000 x 1000, adapt points [black => valid point]
         if (!imagecolorat(self::$alphaMapCache[$areaId], $set['posX'] * 10, $set['posY'] * 10))
@@ -367,16 +290,27 @@ class Game
         switch ($type)
         {
             case Type::NPC:
-                $result = DB::World()->select('SELECT `guid` AS ARRAY_KEY, `id`, `map` AS `mapId`, `position_y` AS `posX`, `position_x` AS `posY` FROM creature WHERE `guid` IN (?a)', $guids);
+                $result = DB::World()->select('SELECT `guid` AS ARRAY_KEY,              `id`, `map`         AS `mapId`, `position_x` AS `posX`, `position_y` AS `posY` FROM creature        WHERE `guid` IN (?a)', $guids);
                 break;
             case Type::OBJECT:
-                $result = DB::World()->select('SELECT `guid` AS ARRAY_KEY, `id`, `map` AS `mapId`, `position_y` AS `posX`, `position_x` AS `posY` FROM gameobject WHERE `guid` IN (?a)', $guids);
+                $result = DB::World()->select('SELECT `guid` AS ARRAY_KEY,              `id`, `map`         AS `mapId`, `position_x` AS `posX`, `position_y` AS `posY` FROM gameobject      WHERE `guid` IN (?a)', $guids);
                 break;
             case Type::SOUND:
-                $result = DB::AoWoW()->select('SELECT `soundId` AS ARRAY_KEY, `soundId` AS `id`, `mapId`, `posX`, `posY` FROM dbc_soundemitters WHERE `soundId` IN (?a)', $guids);
+                $result = DB::AoWoW()->select('SELECT `id`   AS ARRAY_KEY, `soundId` AS `id`,                  `mapId`,                 `posX`,                 `posY` FROM ?_soundemitters WHERE `id`   IN (?a)', $guids);
+                break;
+            case Type::ZONE:
+                $result = DB::Aowow()->select('SELECT -`id`  AS ARRAY_KEY,              `id`, `parentMapId` AS `mapId`, `parentX`    AS `posX`, `parentY`    AS `posY` FROM ?_zones         WHERE -`id`  IN (?a)', $guids);
                 break;
             case Type::AREATRIGGER:
-                $result = DB::AoWoW()->select('SELECT `id` AS ARRAY_KEY, `id`, `mapId`, `posX`, `posY` FROM dbc_areatrigger WHERE `id` IN (?a)', $guids);
+                $result = [];
+                if ($base = array_filter($guids, function ($x) { return $x > 0; }))
+                    $result = array_replace($result, DB::AoWoW()->select('SELECT `id`   AS ARRAY_KEY,          `id`,          `mapId`,                 `posX`,                 `posY` FROM ?_areatrigger   WHERE `id`   IN (?a)', $base));
+                if ($endpoints = array_filter($guids, function ($x) { return $x < 0; }))
+                    $result = array_replace($result, DB::World()->select(
+                       'SELECT -`ID`          AS ARRAY_KEY, ID          AS `id`,    `target_map` AS `mapId`, `target_position_x` AS `posX`, `target_position_y` AS `posY` FROM areatrigger_teleport WHERE -`id`          IN (?a) UNION
+                        SELECT -`entryorguid` AS ARRAY_KEY, entryorguid AS `id`, `action_param1` AS `mapId`, `target_x`          AS `posX`, `target_y`          AS `posY` FROM smart_scripts        WHERE -`entryorguid` IN (?a) AND `source_type` = ?d AND `action_type` = ?d',
+                        $endpoints, $endpoints, SmartAI::SRC_TYPE_AREATRIGGER, SmartAction::ACTION_TELEPORT
+                     ));
                 break;
             default:
                 trigger_error('Game::getWorldPosForGUID - instanced with unsupported TYPE #'.$type, E_USER_WARNING);
@@ -393,39 +327,40 @@ class Game
         if (!$mapId < 0)
             return [];
 
-        $query = 'SELECT
-                    dm.id,
-                    wma.areaId,
-                    IFNULL(dm.floor, 0) AS floor,
-                    100 - ROUND(IF(dm.id IS NOT NULL, (?f - dm.minY) * 100 / (dm.maxY - dm.minY), (?f - wma.right)  * 100 / (wma.left - wma.right)), 1) AS `posX`,
-                    100 - ROUND(IF(dm.id IS NOT NULL, (?f - dm.minX) * 100 / (dm.maxX - dm.minX), (?f - wma.bottom) * 100 / (wma.top - wma.bottom)), 1) AS `posY`,
-                    SQRT(POWER(abs(IF(dm.id IS NOT NULL, (?f - dm.minY) * 100 / (dm.maxY - dm.minY), (?f - wma.right)  * 100 / (wma.left - wma.right)) - 50), 2) +
-                         POWER(abs(IF(dm.id IS NOT NULL, (?f - dm.minX) * 100 / (dm.maxX - dm.minX), (?f - wma.bottom) * 100 / (wma.top - wma.bottom)) - 50), 2)) AS `dist`
-                FROM
-                    dbc_worldmaparea wma
-                LEFT JOIN
-                    dbc_dungeonmap dm ON dm.mapId = IF(?d AND (wma.mapId NOT IN (0, 1, 530, 571) OR wma.areaId = 4395), wma.mapId, -1)
-                WHERE
-                    wma.mapId = ?d AND IF(?d, wma.areaId = ?d, wma.areaId <> 0){ AND IF(dm.floor IS NULL, 1, dm.floor = ?d)}
-                HAVING
-                    (`posX` BETWEEN 0.1 AND 99.9 AND `posY` BETWEEN 0.1 AND 99.9)
-                ORDER BY
-                    `dist` ASC';
+        $query =
+           'SELECT
+                x.`id`,
+                x.`areaId`,
+                IF(x.`defaultDungeonMapId` < 0, x.`floor` + 1, x.`floor`) AS `floor`,
+                IF(dm.`id` IS NOT NULL OR x.`defaultDungeonMapId` < 0, 1, 0) AS `multifloor`,
+                ROUND((x.`maxY` - ?d) * 100 / (x.`maxY` - x.`minY`), 1) AS `posX`,
+                ROUND((x.`maxX` - ?d) * 100 / (x.`maxX` - x.`minX`), 1) AS `posY`,
+                SQRT(POWER(ABS((x.`maxY` - ?d) * 100 / (x.`maxY` - x.`minY`) - 50), 2) +
+                     POWER(ABS((x.`maxX` - ?d) * 100 / (x.`maxX` - x.`minX`) - 50), 2)) AS `dist`
+            FROM
+                (SELECT 0 AS `id`, `areaId`,     `mapId`, `right` AS `minY`, `left` AS `maxY`, `top` AS `maxX`, `bottom` AS `minX`, 0 AS `floor`, 0 AS `worldMapAreaId`, `defaultDungeonMapId` FROM ?_worldmaparea wma UNION
+                 SELECT   dm.`id`, `areaId`, wma.`mapId`,            `minY`,           `maxY`,          `maxX`,             `minX`,      `floor`,      `worldMapAreaId`, `defaultDungeonMapId` FROM ?_worldmaparea wma
+                 JOIN   ?_dungeonmap dm ON dm.`mapId` = wma.`mapId` WHERE wma.`mapId` NOT IN (0, 1, 530, 571) OR wma.`areaId` = 4395) x
+            LEFT JOIN
+                ?_dungeonmap dm ON dm.`mapId` = x.`mapId` AND dm.`worldMapAreaId` = x.`worldMapAreaId` AND dm.`floor` <> x.`floor` AND dm.`worldMapAreaId` > 0
+            WHERE
+                x.`mapId` = ?d AND IF(?d, x.`areaId` = ?d, x.`areaId` <> 0){ AND x.`floor` = ?d - IF(x.`defaultDungeonMapId` < 0, 1, 0)}
+            GROUP BY
+                x.`id`, x.`areaId`
+            HAVING
+                (`posX` BETWEEN 0.1 AND 99.9 AND `posY` BETWEEN 0.1 AND 99.9)
+            ORDER BY
+                `multifloor` DESC, `dist` ASC';
 
         // dist BETWEEN 0 (center) AND 70.7 (corner)
-        $points = DB::Aowow()->select($query, $posX, $posX, $posY, $posY, $posX, $posX, $posY, $posY, 1, $mapId, $areaId, $areaId, $floor < 0 ? DBSIMPLE_SKIP : $floor);
-        if (!$points)                                       // retry: TC counts pre-instance subareas as instance-maps .. which have no map file
-            $points = DB::Aowow()->select($query, $posX, $posX, $posY, $posY, $posX, $posX, $posY, $posY, 0, $mapId, 0, 0, DBSIMPLE_SKIP);
-
+        $points = DB::Aowow()->select($query, $posY, $posX, $posY, $posX, $mapId, $areaId, $areaId, $floor < 0 ? DBSIMPLE_SKIP : $floor);
+        if (!$points)                                       // retry: pre-instance subareas belong to the instance-maps but are displayed on the outside. There also cases where the zone reaches outside it's own map.
+            $points = DB::Aowow()->select($query, $posY, $posX, $posY, $posX, $mapId, 0, 0, DBSIMPLE_SKIP);
         if (!is_array($points))
         {
             trigger_error('Game::worldPosToZonePos - dbc query failed', E_USER_ERROR);
             return [];
         }
-
-        // Black Temple and Sunwell floor offset bullshit
-        if ($points && in_array($mapId, [564, 580]))
-            $points[0]['floor']++;
 
         return $points;
     }
@@ -436,28 +371,20 @@ class Game
         $quotes   = [];
         $soundIds = [];
 
-        $quoteSrc = DB::World()->select('
-            SELECT
-                ct.GroupID AS ARRAY_KEY, ct.ID as ARRAY_KEY2,
-                ct.`Type` AS `talkType`,
-                ct.TextRange AS `range`,
-                IFNULL(bct.`LanguageID`, ct.`Language`) AS lang,
-                IFNULL(NULLIF(bct.Text, ""), IFNULL(NULLIF(bct.Text1, ""), IFNULL(ct.`Text`, ""))) AS text_loc0,
-               {IFNULL(NULLIF(bctl.Text, ""), IFNULL(NULLIF(bctl.Text1, ""), IFNULL(ctl.Text, ""))) AS text_loc?d,}
-                IF(bct.SoundEntriesID > 0, bct.SoundEntriesID, ct.Sound) AS soundId
-            FROM
-                creature_text ct
-           {LEFT JOIN
-                creature_text_locale ctl ON ct.CreatureID = ctl.CreatureID AND ct.GroupID = ctl.GroupID AND ct.ID = ctl.ID AND ctl.Locale = ?}
-            LEFT JOIN
-                broadcast_text bct ON ct.BroadcastTextId = bct.ID
-           {LEFT JOIN
-                broadcast_text_locale bctl ON ct.BroadcastTextId = bctl.ID AND bctl.locale = ?}
-            WHERE
-                ct.CreatureID = ?d',
-            User::$localeId ?: DBSIMPLE_SKIP,
-            User::$localeId ? Util::$localeStrings[User::$localeId] : DBSIMPLE_SKIP,
-            User::$localeId ? Util::$localeStrings[User::$localeId] : DBSIMPLE_SKIP,
+        $quoteSrc = DB::World()->select(
+           'SELECT    ct.`GroupID` AS ARRAY_KEY, ct.`ID` AS ARRAY_KEY2, ct.`Type` AS "talkType", ct.TextRange AS "range",
+                      IFNULL(bct.`LanguageID`, ct.`Language`) AS "lang",
+                      IFNULL(NULLIF(bct.`Text`, ""),  IFNULL(NULLIF(bct.`Text1`, ""),  IFNULL(ct.`Text`, "")))  AS "text_loc0",
+                    { IFNULL(NULLIF(bctl.`Text`, ""), IFNULL(NULLIF(bctl.`Text1`, ""), IFNULL(ctl.`Text`, ""))) AS text_loc?d, }
+                      IF(bct.`SoundEntriesID` > 0, bct.`SoundEntriesID`, ct.`Sound`) AS "soundId"
+            FROM      creature_text ct
+          { LEFT JOIN creature_text_locale ctl   ON ct.`CreatureID`      = ctl.`CreatureID` AND ct.`GroupID` = ctl.`GroupID` AND ct.`ID` = ctl.`ID` AND ctl.`Locale` = ? }
+            LEFT JOIN broadcast_text bct         ON ct.`BroadcastTextId` = bct.`ID`
+          { LEFT JOIN broadcast_text_locale bctl ON ct.`BroadcastTextId` = bctl.`ID` AND bctl.`locale` = ? }
+            WHERE     ct.`CreatureID` = ?d',
+            Lang::getLocale()->value ?: DBSIMPLE_SKIP,
+            Lang::getLocale()->value ? Lang::getLocale()->json() : DBSIMPLE_SKIP,
+            Lang::getLocale()->value ? Lang::getLocale()->json() : DBSIMPLE_SKIP,
             $creatureId
         );
 
@@ -477,7 +404,7 @@ class Game
                 if (in_array($t['talkType'], [2, 16]) && strpos($msg, '%s') === false)
                     $msg = '%s '.$msg;
 
-                // fixup: bad case-insensivity
+                // fixup: bad case-insensitivity
                 $msg = Util::parseHtmlText(str_replace('%S', '%s', htmlentities($msg)), !$asHTML);
 
                 if ($talkSource)

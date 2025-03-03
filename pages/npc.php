@@ -10,7 +10,7 @@ class NpcPage extends GenericPage
 {
     use TrDetailPage;
 
-    protected $placeholder  = null;
+    protected $placeholder  = [];
     protected $accessory    = [];
     protected $quotes       = [];
     protected $reputation   = [];
@@ -24,7 +24,7 @@ class NpcPage extends GenericPage
     protected $mode          = CACHE_TYPE_PAGE;
     protected $scripts       = [[SC_JS_FILE, 'js/swfobject.js'], [SC_CSS_FILE, 'css/Profiler.css']];
 
-    protected $_get          = ['domain' => ['filter' => FILTER_CALLBACK, 'options' => 'GenericPage::checkDomain']];
+    protected $_get          = ['domain' => ['filter' => FILTER_CALLBACK, 'options' => 'Locale::tryFromDomain']];
 
     private   $soundIds      = [];
     private   $powerTpl      = '$WowheadPower.registerNpc(%d, %d, %s);';
@@ -35,7 +35,7 @@ class NpcPage extends GenericPage
 
         // temp locale
         if ($this->mode == CACHE_TYPE_TOOLTIP && $this->_get['domain'])
-            Util::powerUseLocale($this->_get['domain']);
+            Lang::load($this->_get['domain']);
 
         $this->typeId = intVal($id);
 
@@ -67,7 +67,7 @@ class NpcPage extends GenericPage
         $_typeFlags  = $this->subject->getField('typeFlags');
         $_altIds     = [];
         $_altNPCs    = null;
-        $placeholder = null;
+        $placeholder = [];
         $accessory   = [];
 
         // difficulty entries of self
@@ -83,7 +83,7 @@ class NpcPage extends GenericPage
                 $_altNPCs = new CreatureList(array(['id', array_keys($_altIds)]));
         }
 
-        if ($_ = DB::World()->selectCol('SELECT DISTINCT entry FROM vehicle_template_accessory WHERE accessory_entry = ?d', $this->typeId))
+        if ($_ = DB::World()->selectCol('SELECT DISTINCT `entry` FROM vehicle_template_accessory WHERE `accessory_entry` = ?d', $this->typeId))
         {
             $vehicles = new CreatureList(array(['id', $_]));
             foreach ($vehicles->iterate() as $id => $__)
@@ -92,11 +92,11 @@ class NpcPage extends GenericPage
 
         // try to determine, if it's spawned in a dungeon or raid (shaky at best, if spawned by script)
         $mapType = 0;
-        if ($maps = DB::Aowow()->selectCol('SELECT DISTINCT areaId from ?_spawns WHERE type = ?d AND typeId = ?d', Type::NPC, $this->typeId))
+        if ($maps = DB::Aowow()->selectCol('SELECT DISTINCT `areaId` FROM ?_spawns WHERE `type` = ?d AND `typeId` = ?d', Type::NPC, $this->typeId))
         {
             if (count($maps) == 1)                          // should only exist in one instance
             {
-                switch (DB::Aowow()->selectCell('SELECT `type` FROM ?_zones WHERE id = ?d', $maps[0]))
+                switch (DB::Aowow()->selectCell('SELECT `type` FROM ?_zones WHERE `id` = ?d', $maps[0]))
                 {
                  // case MAP_TYPE_DUNGEON:
                     case MAP_TYPE_DUNGEON_HC:
@@ -108,16 +108,15 @@ class NpcPage extends GenericPage
                 }
             }
         }
-        else if ($_altIds)                                  // not spawned, but has difficultyDummies
-        {
-            if (count($_altIds) > 1)                        // 3 or more version -> definitly raid (10/25 + hc)
-                $mapType = 2;
-            else                                            // 2 versions; may be Heroic (use this), but may also be 10/25-raid
-                $mapType = 1;
-        }
-
-
-
+        // npc is difficulty dummy: get max difficulty from parent npc
+        if ($placeholder && ($mt = DB::Aowow()->selectCell('SELECT IF(`difficultyEntry1` = ?d, 1, 2) FROM ?_creature WHERE `difficultyEntry1` = ?d OR `difficultyEntry2` = ?d OR `difficultyEntry3` = ?d', $this->typeId, $this->typeId, $this->typeId, $this->typeId)))
+            $mapType = max($mapType, $mt);
+        // npc has difficulty dummys: 2+ dummies -> definitely raid (10/25 + hc); 1 dummy -> may be heroic (used here), but may also be 10/25-raid
+        if ($_altIds)
+            $mapType = max($mapType, count($_altIds) > 1 ? 2 : 1);
+        // for event encounters a single npc may be reused over multiple difficulties but have different chests assigned
+        if ($d = DB::Aowow()->selectCell('SELECT MAX(`difficulty`) FROM ?_loot_link WHERE `npcId` IN (?a)', array_merge($_altIds, [$this->typeId])))
+            $mapType = max($mapType, $d > 2 ? 2 : 1);
 
 
         /***********/
@@ -127,7 +126,7 @@ class NpcPage extends GenericPage
         $infobox = Lang::getInfoBoxForFlags($this->subject->getField('cuFlags'));
 
         // Event (ignore events, where the object only gets removed)
-        if ($_ = DB::World()->selectCol('SELECT DISTINCT ge.eventEntry FROM game_event ge, game_event_creature gec, creature c WHERE ge.eventEntry = gec.eventEntry AND c.guid = gec.guid AND c.id = ?d', $this->typeId))
+        if ($_ = DB::World()->selectCol('SELECT DISTINCT ge.`eventEntry` FROM game_event ge, game_event_creature gec, creature c WHERE ge.`eventEntry` = gec.`eventEntry` AND c.`guid` = gec.`guid` AND c.`id` = ?d', $this->typeId))
         {
             $this->extendGlobalIds(Type::WORLDEVENT, ...$_);
             $ev = [];
@@ -173,7 +172,7 @@ class NpcPage extends GenericPage
         // Tameable
         if ($_typeFlags & 0x1)
             if ($_ = $this->subject->getField('family'))
-                $infobox[] = sprintf(Lang::npc('tameable'), '[url=pet='.$_.']'.Lang::game('fa', $_).'[/url]');
+                $infobox[] = Lang::npc('tameable', ['[url=pet='.$_.']'.Lang::game('fa', $_).'[/url]']);
 
         // Wealth
         if ($_ = intVal(($this->subject->getField('minGold') + $this->subject->getField('maxGold')) / 2))
@@ -182,6 +181,10 @@ class NpcPage extends GenericPage
         // is Vehicle
         if ($this->subject->getField('vehicleId'))
             $infobox[] = Lang::npc('vehicle');
+
+        // is visible as ghost
+        if ($this->subject->getField('npcflag') & (NPC_FLAG_SPIRIT_HEALER | NPC_FLAG_SPIRIT_GUIDE))
+            $infobox[] = Lang::npc('spirit');
 
         if (User::isInGroup(U_GROUP_EMPLOYEE))
         {
@@ -375,14 +378,14 @@ class NpcPage extends GenericPage
         $sai = null;
         if ($this->subject->getField('aiName') == 'SmartAI')
         {
-            $sai = new SmartAI(SAI_SRC_TYPE_CREATURE, $this->typeId, ['name' => $this->subject->getField('name', true)]);
+            $sai = new SmartAI(SmartAI::SRC_TYPE_CREATURE, $this->typeId);
             if (!$sai->prepare())                           // no smartAI found .. check per guid
             {
                 // at least one of many
-                $guids = DB::World()->selectCol('SELECT guid FROM creature WHERE id = ?d', $this->typeId);
+                $guids = DB::World()->selectCol('SELECT `guid` FROM creature WHERE `id` = ?d', $this->typeId);
                 while ($_ = array_pop($guids))
                 {
-                    $sai = new SmartAI(SAI_SRC_TYPE_CREATURE, -$_, ['baseEntry' => $this->typeId, 'name' => $this->subject->getField('name', true), 'title' => ' [small](for GUID: '.$_.')[/small]']);
+                    $sai = new SmartAI(SmartAI::SRC_TYPE_CREATURE, -$_, ['baseEntry' => $this->typeId, 'title' => ' [small](for GUID: '.$_.')[/small]']);
                     if ($sai->prepare())
                         break;
                 }
@@ -428,7 +431,7 @@ class NpcPage extends GenericPage
         if ($tplSpells)
             $conditions[] = ['id', $tplSpells];
 
-        if ($smartSpells = SmartAI::getSpellCastsForOwner($this->typeId, SAI_SRC_TYPE_CREATURE))
+        if ($smartSpells = SmartAI::getSpellCastsForOwner($this->typeId, SmartAI::SRC_TYPE_CREATURE))
             $genSpells = $smartSpells;
 
         if ($auras = DB::World()->selectCell('SELECT auras FROM creature_template_addon WHERE entry = ?d', $this->typeId))
@@ -485,6 +488,11 @@ class NpcPage extends GenericPage
                     }
                 }
 
+                $cnd = new Conditions();
+                $cnd->getBySourceGroup($this->typeId, Conditions::SRC_VEHICLE_SPELL)->prepare();
+                if ($cnd->toListviewColumn($controled, $extraCols, $this->typeId, 'id'))
+                    $this->extendGlobalData($cnd->getJsGlobals());
+
                 if ($normal)
                     $this->lvTabs[] = [SpellList::$brickFile, array(
                         'data' => array_values($normal),
@@ -493,20 +501,26 @@ class NpcPage extends GenericPage
                     )];
 
                 if ($controled)
-                    $this->lvTabs[] = [SpellList::$brickFile, array(
+                {
+                    $lvTab = array(
                         'data' => array_values($controled),
                         'name' => '$LANG.tab_controlledabilities',
                         'id'   => 'controlled-abilities'
-                    )];
+                    );
+                    if ($extraCols)
+                        $lvTab['extraCols'] = $extraCols;
+
+                    $this->lvTabs[] = [SpellList::$brickFile, $lvTab];
+                }
             }
         }
 
         // tab: summoned by [spell]
         $conditions = array(
             'OR',
-            ['AND', ['effect1Id', [28, 56, 112]], ['effect1MiscValue', $this->typeId]],
-            ['AND', ['effect2Id', [28, 56, 112]], ['effect2MiscValue', $this->typeId]],
-            ['AND', ['effect3Id', [28, 56, 112]], ['effect3MiscValue', $this->typeId]]
+            ['AND', ['effect1Id', [SPELL_EFFECT_SUMMON, SPELL_EFFECT_SUMMON_PET, SPELL_EFFECT_SUMMON_DEMON]], ['effect1MiscValue', $this->typeId]],
+            ['AND', ['effect2Id', [SPELL_EFFECT_SUMMON, SPELL_EFFECT_SUMMON_PET, SPELL_EFFECT_SUMMON_DEMON]], ['effect2MiscValue', $this->typeId]],
+            ['AND', ['effect3Id', [SPELL_EFFECT_SUMMON, SPELL_EFFECT_SUMMON_PET, SPELL_EFFECT_SUMMON_DEMON]], ['effect3MiscValue', $this->typeId]]
         );
 
         $sbSpell = new SpellList($conditions);
@@ -572,40 +586,25 @@ class NpcPage extends GenericPage
                     $this->extendGlobalData($teaches->getJSGlobals(GLOBALINFO_SELF | GLOBALINFO_RELATED));
                     $data = $teaches->getListviewData();
 
-                    $extra = [];
+                    $extraCols = [];
+                    $cnd = new Conditions();
                     foreach ($tSpells as $sId => $train)
                     {
                         if (empty($data[$sId]))
                             continue;
 
                         if ($_ = $train['reqSkillId'])
-                        {
                             if (count($data[$sId]['skill']) == 1 && $_ != $data[$sId]['skill'][0])
-                            {
-                                $this->extendGlobalIds(Type::SKILL, $_);
-                                if (!isset($extra[0]))
-                                    $extra[0] = '$Listview.extraCols.condition';
-
-                                $data[$sId]['condition'][0][$this->typeId][] = [[CND_SKILL, $_, $train['reqSkillValue']]];
-                            }
-                        }
+                                $cnd->addExternalCondition(Conditions::SRC_NONE, $sId, [Conditions::SKILL, $_, $train['reqSkillValue']]);
 
                         for ($i = 1; $i < 3; $i++)
-                        {
                             if ($_ = $train['reqSpellId'.$i])
-                            {
-                                $this->extendGlobalIds(Type::SPELL, $_);
-                                if (!isset($extra[0]))
-                                    $extra[0] = '$Listview.extraCols.condition';
-
-                                $data[$sId]['condition'][0][$this->typeId][] = [[CND_SPELL, $_]];
-                            }
-                        }
+                                $cnd->addExternalCondition(Conditions::SRC_NONE, $sId, [Conditions::SPELL, $_]);
 
                         if ($_ = $train['reqLevel'])
                         {
-                            if (!isset($extra[1]))
-                                $extra[1] = "\$Listview.funcBox.createSimpleCol('reqLevel', LANG.tooltip_reqlevel, '7%', 'reqLevel')";
+                            if (!isset($extraCols[1]))
+                                $extraCols[1] = "\$Listview.funcBox.createSimpleCol('reqLevel', LANG.tooltip_reqlevel, '7%', 'reqLevel')";
 
                             $data[$sId]['reqLevel'] = $_;
                         }
@@ -614,6 +613,9 @@ class NpcPage extends GenericPage
                             $data[$sId]['trainingcost'] = $_;
                     }
 
+                    if ($cnd->toListviewColumn($data, $extraCols))
+                        $this->extendGlobalData($cnd->getJsGlobals());
+
                     $tabData = array(
                         'data'        => array_values($data),
                         'name'        => '$LANG.tab_teaches',
@@ -621,8 +623,8 @@ class NpcPage extends GenericPage
                         'visibleCols' => ['trainingcost']
                     );
 
-                    if ($extra)
-                        $tabData['extraCols'] = array_values($extra);
+                    if ($extraCols)
+                        $tabData['extraCols'] = array_values($extraCols);
 
                     $this->lvTabs[] = [SpellList::$brickFile, $tabData];
                 }
@@ -639,10 +641,11 @@ class NpcPage extends GenericPage
             {
                 $colAddIn  = null;
                 $extraCols = ["\$Listview.funcBox.createSimpleCol('stack', 'stack', '10%', 'stack')", '$Listview.extraCols.cost'];
-                    if ($soldItems->hasSetFields('condition'))
-                        $extraCols[] = '$Listview.extraCols.condition';
 
                 $lvData = $soldItems->getListviewData(ITEMINFO_VENDOR, [Type::NPC => [$this->typeId]]);
+
+                if (array_column($lvData, 'condition'))
+                    $extraCols[] = '$Listview.extraCols.condition';
 
                 if (array_filter(array_column($lvData, 'restock')))
                 {
@@ -650,17 +653,11 @@ class NpcPage extends GenericPage
                     $colAddIn = 'vendorRestockCol';
                 }
 
-                $sc = Util::getServerConditions(CND_SRC_NPC_VENDOR, $this->typeId);
-                if (!empty($sc[0]))
+                $cnd = new Conditions();
+                if ($cnd->getBySourceGroup($this->typeId, Conditions::SRC_NPC_VENDOR)->prepare())
                 {
-                    $this->extendGlobalData($sc[1]);
-
-                    $extraCols[] = '$Listview.extraCols.condition';
-
-                    foreach ($lvData as $id => &$row)
-                        foreach ($sc[0] as $srcType => $cndData)
-                        if (!empty($cndData[$id.':'.$this->typeId]))
-                            $row['condition'][0][$id.':'.$this->typeId] = $cndData[$id.':'.$this->typeId];
+                    $this->extendGlobalData($cnd->getJsGlobals());
+                    $cnd->toListviewColumn($lvData, $extraCols, $this->typeId, 'id');
                 }
 
                 $this->lvTabs[] = [ItemList::$brickFile, array(
@@ -693,9 +690,9 @@ class NpcPage extends GenericPage
     */
 
         $sourceFor = array(
-             [LOOT_CREATURE,   $this->subject->getField('lootId'),           '$LANG.tab_drops',         'drops',         []                          ],
-             [LOOT_PICKPOCKET, $this->subject->getField('pickpocketLootId'), '$LANG.tab_pickpocketing', 'pickpocketing', ['side', 'slot', 'reqlevel']],
-             [LOOT_SKINNING,   $this->subject->getField('skinLootId'),       '$LANG.'.$skinTab[0],      $skinTab[1],     ['side', 'slot', 'reqlevel']]
+            0 => [LOOT_CREATURE,   $this->subject->getField('lootId'),           '$LANG.tab_drops',         'drops',         [                          ], ''],
+            8 => [LOOT_PICKPOCKET, $this->subject->getField('pickpocketLootId'), '$LANG.tab_pickpocketing', 'pickpocketing', ['side', 'slot', 'reqlevel'], ''],
+            9 => [LOOT_SKINNING,   $this->subject->getField('skinLootId'),       '$LANG.'.$skinTab[0],      $skinTab[1],     ['side', 'slot', 'reqlevel'], '']
         );
 
         // temp: manually add loot for difficulty-versions
@@ -714,73 +711,45 @@ class NpcPage extends GenericPage
             foreach ($_altNPCs->iterate() as $id => $__)
             {
                 $mode = ($_altIds[$id] + 1) * ($mapType == 1 ? -1 : 1);
-                if ($lootGO = DB::Aowow()->selectRow('SELECT o.id, o.lootId, o.name_loc0, o.name_loc2, o.name_loc3, o.name_loc6, o.name_loc8 FROM ?_loot_link l JOIN ?_objects o ON o.id = l.objectId WHERE l.npcId = ?d', $id))
-                    array_splice($sourceFor, 1, 0, [[LOOT_GAMEOBJECT, $lootGO['lootId'], $langref[$mode], 'drops-object-'.abs($mode), [], 'note' => '$$WH.sprintf(LANG.lvnote_npcobjectsource, '.$lootGO['id'].', "'.Util::localizedString($lootGO, 'name').'")']]);
+                foreach (DB::Aowow()->select('SELECT o.`id`, o.`lootId`, o.`name_loc0`, o.`name_loc2`, o.`name_loc3`, o.`name_loc4`, o.`name_loc6`, o.`name_loc8`, l.`difficulty` FROM ?_loot_link l JOIN ?_objects o ON o.`id` = l.`objectId` WHERE l.`npcId` = ?d', $id) as $l)
+                    $sourceFor[(($l['difficulty'] - 1) * 2) + 1] = [LOOT_GAMEOBJECT, $l['lootId'], $langref[$l['difficulty'] * ($mapType == 1 ? -1 : 1)], 'drops-object-'.$l['difficulty'], [], '$$WH.sprintf(LANG.lvnote_npcobjectsource, '.$l['id'].', "'.Util::localizedString($l, 'name').'")'];
                 if ($lootId = $_altNPCs->getField('lootId'))
-                    array_splice($sourceFor, 1, 0, [[LOOT_CREATURE,   $lootId,           $langref[$mode], 'drops-'.abs($mode), []]]);
+                    $sourceFor[($mode - 1) * 2] =                  [LOOT_CREATURE,   $lootId,      $langref[$mode],                                       'drops-'.abs($mode),              [], ''];
             }
         }
 
-        if ($lootGOs = DB::Aowow()->select('SELECT o.id, IF(npcId < 0, 1, 0) AS modeDummy, o.lootId, o.name_loc0, o.name_loc2, o.name_loc3, o.name_loc6, o.name_loc8 FROM ?_loot_link l JOIN ?_objects o ON o.id = l.objectId WHERE ABS(l.npcId) = ?d', $this->typeId))
-            foreach ($lootGOs as $idx => $lgo)
-                array_splice($sourceFor, 1, 0, [[LOOT_GAMEOBJECT, $lgo['lootId'], $mapType ? $langref[($mapType == 1 ? -1 : 1) + ($lgo['modeDummy'] ? 1 : 0)] : '$LANG.tab_drops', 'drops-object-'.$idx, [], 'note' => '$$WH.sprintf(LANG.lvnote_npcobjectsource, '.$lgo['id'].', "'.Util::localizedString($lgo, 'name').'")']]);
+        foreach (DB::Aowow()->select('SELECT l.`difficulty` AS ARRAY_KEY, o.`id`, o.`lootId`, o.`name_loc0`, o.`name_loc2`, o.`name_loc3`, o.`name_loc4`, o.`name_loc6`, o.`name_loc8` FROM ?_loot_link l JOIN ?_objects o ON o.`id` = l.`objectId` WHERE l.`npcId` = ?d', $this->typeId) as $difficulty => $lgo)
+            $sourceFor[(($difficulty - 1) * 2) + 1] = [LOOT_GAMEOBJECT, $lgo['lootId'], $mapType ? $langref[$difficulty * ($mapType == 1 ? -1 : 1)] : '$LANG.tab_drops', 'drops-object-'.$difficulty, [], '$$WH.sprintf(LANG.lvnote_npcobjectsource, '.$lgo['id'].', "'.Util::localizedString($lgo, 'name').'")'];
 
-        $lootGOs = DB::World()->select('select SourceEntry, ConditionValue1, ConditionValue2 from conditions where SourceTypeOrReferenceId = 1 and SourceGroup = ?d and ConditionTypeOrReference = ?d', $this->typeId, CND_SKILL);
+        ksort($sourceFor);
 
-        $reqQuest = [];
-        foreach ($sourceFor as $sf)
+        foreach ($sourceFor as [$lootTpl, $lootId, $tabName, $tabId, $hiddenCols, $note])
         {
             $creatureLoot = new Loot();
-            if ($creatureLoot->getByContainer($sf[0], $sf[1]))
+            if ($creatureLoot->getByContainer($lootTpl, $lootId))
             {
                 $extraCols   = $creatureLoot->extraCols;
                 $extraCols[] = '$Listview.extraCols.percent';
 
                 $this->extendGlobalData($creatureLoot->jsGlobals);
 
-                $this->extendWithConditions($creatureLoot, $lootGOs, $extraCols, $reqQuest);
-
                 $tabData = array(
                     'data'      => array_values($creatureLoot->getResult()),
-                    'name'      => $sf[2],
-                    'id'        => $sf[3],
-                    'extraCols' => $extraCols,
+                    'name'      => $tabName,
+                    'id'        => $tabId,
+                    'extraCols' => array_values(array_unique($extraCols)),
                     'sort'      => ['-percent', 'name']
                 );
 
-                if (!empty($sf['note']))
-                    $tabData['note'] = $sf['note'];
-                else if ($sf[0] == LOOT_SKINNING)
+                if ($note)
+                    $tabData['note'] = $note;
+                else if ($lootTpl == LOOT_SKINNING)
                     $tabData['note'] = '<b>'.Lang::formatSkillBreakpoints(Game::getBreakpointsForSkill($skinTab[2], $this->subject->getField('maxLevel')), Lang::FMT_HTML).'</b>';
 
-                if ($sf[4])
-                    $tabData['hiddenCols'] = $sf[4];
+                if ($hiddenCols)
+                    $tabData['hiddenCols'] = $hiddenCols;
 
                 $this->lvTabs[] = [ItemList::$brickFile, $tabData];
-            }
-        }
-
-        if ($reqIds = array_keys($reqQuest))                // apply quest-conditions as back-reference
-        {
-            $conditions = array(
-                'OR',
-                ['reqSourceItemId1', $reqIds], ['reqSourceItemId2', $reqIds],
-                ['reqSourceItemId3', $reqIds], ['reqSourceItemId4', $reqIds],
-                ['reqItemId1', $reqIds], ['reqItemId2', $reqIds], ['reqItemId3', $reqIds],
-                ['reqItemId4', $reqIds], ['reqItemId5', $reqIds], ['reqItemId6', $reqIds]
-            );
-
-            $reqQuests = new QuestList($conditions);
-            $this->extendGlobalData($reqQuests->getJSGlobals());
-
-            foreach ($reqQuests->iterate() as $qId => $__)
-            {
-                if (empty($reqQuests->requires[$qId][Type::ITEM]))
-                    continue;
-
-                foreach ($reqIds as $rId)
-                    if (in_array($rId, $reqQuests->requires[$qId][Type::ITEM]))
-                        $reqQuest[$rId] = $reqQuests->id;
             }
         }
 
@@ -857,7 +826,7 @@ class NpcPage extends GenericPage
         }
 
         // tab: passengers
-        if ($_ = DB::World()->selectCol('SELECT accessory_entry AS ARRAY_KEY, GROUP_CONCAT(seat_id) FROM vehicle_template_accessory WHERE entry = ?d GROUP BY accessory_entry', $this->typeId))
+        if ($_ = DB::World()->selectCol('SELECT `accessory_entry` AS ARRAY_KEY, GROUP_CONCAT(`seat_id`) FROM vehicle_template_accessory WHERE `entry` = ?d GROUP BY `accessory_entry`', $this->typeId))
         {
             $passengers = new CreatureList(array(['id', array_keys($_)]));
             if (!$passengers->error)
@@ -889,10 +858,10 @@ class NpcPage extends GenericPage
             * Dialogue VO => creature_text
             * onClick VO => CreatureDisplayInfo.dbc => NPCSounds.dbc
         */
-        $this->soundIds = array_merge($this->soundIds, SmartAI::getSoundsPlayedForOwner($this->typeId, SAI_SRC_TYPE_CREATURE));
+        $this->soundIds = array_merge($this->soundIds, SmartAI::getSoundsPlayedForOwner($this->typeId, SmartAI::SRC_TYPE_CREATURE));
 
         // up to 4 possible displayIds .. for the love of things betwixt, just use the first!
-        $activitySounds = DB::Aowow()->selectRow('SELECT * FROM ?_creature_sounds WHERE id = ?d', $this->subject->getField('displayId1'));
+        $activitySounds = DB::Aowow()->selectRow('SELECT * FROM ?_creature_sounds WHERE `id` = ?d', $this->subject->getField('displayId1'));
         array_shift($activitySounds);                       // remove id-column
         $this->soundIds = array_merge($this->soundIds, array_values($activitySounds));
 
@@ -914,6 +883,18 @@ class NpcPage extends GenericPage
                 $this->lvTabs[] = [SoundList::$brickFile, $tabData];
             }
         }
+
+        // tab: conditions
+        $cnd = new Conditions();
+        $cnd->getBySourceEntry($this->typeId, Conditions::SRC_CREATURE_TEMPLATE_VEHICLE)
+            ->getBySourceGroup($this->typeId, Conditions::SRC_SPELL_CLICK_EVENT)
+            ->getByCondition(Type::NPC, $this->typeId)
+            ->prepare();
+        if ($tab = $cnd->toListviewTab())
+        {
+            $this->extendGlobalData($cnd->getJsGlobals());
+            $this->lvTabs[] = $tab;
+        }
     }
 
     protected function generateTooltip()
@@ -921,22 +902,22 @@ class NpcPage extends GenericPage
         $power = new StdClass();
         if (!$this->subject->error)
         {
-            $power->{'name_'.User::$localeString}    = $this->subject->getField('name', true);
-            $power->{'tooltip_'.User::$localeString} = $this->subject->renderTooltip();
-            $power->map                              = $this->subject->getSpawns(SPAWNINFO_SHORT);
+            $power->{'name_'.Lang::getLocale()->json()}    = $this->subject->getField('name', true);
+            $power->{'tooltip_'.Lang::getLocale()->json()} = $this->subject->renderTooltip();
+            $power->map                                    = $this->subject->getSpawns(SPAWNINFO_SHORT);
         }
 
-        return sprintf($this->powerTpl, $this->typeId, User::$localeId, Util::toJSON($power, JSON_AOWOW_POWER));
+        return sprintf($this->powerTpl, $this->typeId, Lang::getLocale()->value, Util::toJSON($power, JSON_AOWOW_POWER));
     }
 
-    private function getRepForId($entries, &$spillover)
+    private function getRepForId(array $entries, array &$spillover) : array
     {
-        $rows  = DB::World()->select('
-            SELECT creature_id AS npc, RewOnKillRepFaction1 AS faction, RewOnKillRepValue1 AS qty, MaxStanding1 AS maxRank, isTeamAward1 AS spillover
-            FROM creature_onkill_reputation WHERE creature_id IN (?a) AND RewOnKillRepFaction1 > 0 UNION
-            SELECT creature_id AS npc, RewOnKillRepFaction2 As faction, RewOnKillRepValue2 AS qty, MaxStanding2 AS maxRank, isTeamAward2 AS spillover
-            FROM creature_onkill_reputation WHERE creature_id IN (?a) AND RewOnKillRepFaction2 > 0',
-            (array)$entries, (array)$entries
+        $rows  = DB::World()->select(
+           'SELECT `creature_id` AS "npc", `RewOnKillRepFaction1` AS "faction", `RewOnKillRepValue1` AS "qty", `MaxStanding1` AS "maxRank", `isTeamAward1` AS "spillover"
+            FROM   creature_onkill_reputation WHERE `creature_id` IN (?a) AND `RewOnKillRepFaction1` > 0 UNION
+            SELECT `creature_id` AS "npc", `RewOnKillRepFaction2` AS "faction", `RewOnKillRepValue2` AS "qty", `MaxStanding2` AS "maxRank", `isTeamAward2` AS "spillover"
+            FROM   creature_onkill_reputation WHERE `creature_id` IN (?a) AND `RewOnKillRepFaction2` > 0',
+            $entries, $entries
         );
 
         $factions = new FactionList(array(['id', array_column($rows, 'faction')]));
@@ -955,7 +936,7 @@ class NpcPage extends GenericPage
                 'cap'  => $row['maxRank'] && $row['maxRank'] < REP_EXALTED ? Lang::game('rep', $row['maxRank']) : null
             );
 
-            $cuRate = DB::World()->selectCell('SELECT creature_rate FROM reputation_reward_rate WHERE creature_rate <> 1 AND faction = ?d', $row['faction']);
+            $cuRate = DB::World()->selectCell('SELECT `creature_rate` FROM reputation_reward_rate WHERE `creature_rate` <> 1 AND `faction` = ?d', $row['faction']);
             if ($cuRate !== null)
                 $set['qty'][1] = $set['qty'][0] * ($cuRate - 1);
 
@@ -974,13 +955,13 @@ class NpcPage extends GenericPage
         return $result;
     }
 
-    private function getOnKillRep($dummyIds, $mapType)
+    private function getOnKillRep(array $dummyIds, int $mapType) : array
     {
         $spilledParents = [];
         $reputation     = [];
 
         // base NPC
-        if ($base = $this->getRepForId($this->typeId, $spilledParents))
+        if ($base = $this->getRepForId([$this->typeId], $spilledParents))
             $reputation[] = [Lang::npc('modes', 1, 0), $base];
 
         // difficulty dummys
@@ -1036,7 +1017,7 @@ class NpcPage extends GenericPage
         return $reputation;
     }
 
-    private function getQuotes()
+    private function getQuotes() : array
     {
         [$quotes, $nQuotes, $soundIds] = Game::getQuotesForCreature($this->typeId, true, $this->subject->getField('name', true));
 
@@ -1044,49 +1025,6 @@ class NpcPage extends GenericPage
             $this->soundIds = array_merge($this->soundIds, $soundIds);
 
         return [$quotes, $nQuotes];
-    }
-
-    private function getConditions($itemId, $data)
-    {
-        foreach ($data as $datum)
-        {
-            if ($datum['SourceEntry'] == $itemId)
-            {
-                return [CND_SKILL, $datum['ConditionValue1'], $datum['ConditionValue2']];
-            }
-        }
-
-        return null;
-    }
-
-    private function extendWithConditions($creatureLoot, $lootConditions, &$extraCols, &$reqQuest)
-    {
-        $hasExtraCol = false;
-        $reqSkill = [];
-
-        foreach ($creatureLoot->iterate() as &$lv)
-        {
-            if ($lv['quest'])
-            {
-                $hasExtraCol = true;
-                $reqQuest[$lv['id']] = 0;
-                $lv['condition'][0][$this->typeId][] = [[CND_QUESTTAKEN, &$reqQuest[$lv['id']]]];
-            }
-            elseif ($skill = $this->getConditions($lv['id'], $lootConditions))
-            {
-                $hasExtraCol = true;
-                $lv['condition'][0][$this->typeId][] = [$skill];
-                $reqSkill[] = $skill[1];
-            }
-        }
-
-        if ($hasExtraCol)
-        {
-            $extraCols[] = '$Listview.extraCols.condition';
-        }
-
-        $reqSkills = new SkillList(['OR', ['id', array_unique($reqSkill)]]);
-        $this->extendGlobalData($reqSkills->getJSGlobals());
     }
 }
 

@@ -55,7 +55,7 @@ class ObjectsPage extends GenericPage
             $conditions[] = $_;
 
         $tabData = ['data' => []];
-        $objects = new GameObjectList($conditions, ['extraOpts' => $this->filterObj->extraOpts]);
+        $objects = new GameObjectList($conditions, ['extraOpts' => $this->filterObj->extraOpts, 'calcTotal' => true]);
         if (!$objects->error)
         {
             $tabData['data'] = array_values($objects->getListviewData());
@@ -63,9 +63,9 @@ class ObjectsPage extends GenericPage
                 $tabData['visibleCols'] = ['skill'];
 
             // create note if search limit was exceeded
-            if ($objects->getMatches() > CFG_SQL_LIMIT_DEFAULT)
+            if ($objects->getMatches() > Cfg::get('SQL_LIMIT_DEFAULT'))
             {
-                $tabData['note'] = sprintf(Util::$tryFilteringString, 'LANG.lvnote_objectsfound', $objects->getMatches(), CFG_SQL_LIMIT_DEFAULT);
+                $tabData['note'] = sprintf(Util::$tryFilteringString, 'LANG.lvnote_objectsfound', $objects->getMatches(), Cfg::get('SQL_LIMIT_DEFAULT'));
                 $tabData['_truncated'] = 1;
             }
 

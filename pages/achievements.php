@@ -76,7 +76,7 @@ class AchievementsPage extends GenericPage
         if ($fiCnd = $this->filterObj->getConditions())
             $conditions[] = $fiCnd;
 
-        $acvList = new AchievementList($conditions);
+        $acvList = new AchievementList($conditions, ['calcTotal' => true]);
         if (!$acvList->getMatches())
         {
             $category   = [!empty($this->category) ? (int)end($this->category) : 0];
@@ -86,7 +86,7 @@ class AchievementsPage extends GenericPage
             if ($catList = DB::Aowow()->SelectCol('SELECT Id FROM ?_achievementcategory WHERE parentCat IN (?a) OR parentCat2 IN (?a) ', $category, $category))
                 $conditions[] = ['category', $catList];
 
-            $acvList = new AchievementList($conditions);
+            $acvList = new AchievementList($conditions, ['calcTotal' => true]);
         }
 
         $tabData = [];
@@ -105,9 +105,9 @@ class AchievementsPage extends GenericPage
                 $tabData['extraCols'] = '$fi_getExtraCols(fi_extraCols, 0, 0)';
 
             // create note if search limit was exceeded
-            if ($acvList->getMatches() > CFG_SQL_LIMIT_DEFAULT)
+            if ($acvList->getMatches() > Cfg::get('SQL_LIMIT_DEFAULT'))
             {
-                $tabData['note'] = sprintf(Util::$tryFilteringString, 'LANG.lvnote_achievementsfound', $acvList->getMatches(), CFG_SQL_LIMIT_DEFAULT);
+                $tabData['note'] = sprintf(Util::$tryFilteringString, 'LANG.lvnote_achievementsfound', $acvList->getMatches(), Cfg::get('SQL_LIMIT_DEFAULT'));
                 $tabData['_truncated'] = 1;
             }
 

@@ -58,6 +58,9 @@ class SpellList extends BaseType
         SPELL_EFFECT_SCHOOL_DAMAGE,         SPELL_EFFECT_ENVIRONMENTAL_DAMAGE,              SPELL_EFFECT_POWER_DRAIN,                       SPELL_EFFECT_HEALTH_LEECH,                      SPELL_EFFECT_POWER_BURN,
         SPELL_EFFECT_HEAL_MAX_HEALTH
     );
+    public const EFFECTS_ENCHANTMENT      = array(
+        SPELL_EFFECT_ENCHANT_ITEM,          SPELL_EFFECT_ENCHANT_ITEM_TEMPORARY,            SPELL_EFFECT_ENCHANT_HELD_ITEM,                 SPELL_EFFECT_ENCHANT_ITEM_PRISMATIC
+    );
 
     public const AURAS_HEAL               = array(
         SPELL_AURA_DUMMY,                   SPELL_AURA_PERIODIC_HEAL,                       SPELL_AURA_PERIODIC_HEALTH_FUNNEL,              SPELL_AURA_SCHOOL_ABSORB,                       SPELL_AURA_MANA_SHIELD,
@@ -99,9 +102,9 @@ class SpellList extends BaseType
                         'src' => ['j' => ['?_source src ON type = 6 AND typeId = s.id', true], 's' => ', moreType, moreTypeId, moreZoneId, moreMask, src1, src2, src3, src4, src5, src6, src7, src8, src9, src10, src11, src12, src13, src14, src15, src16, src17, src18, src19, src20, src21, src22, src23, src24']
                     );
 
-    public function __construct($conditions = [], $miscData = [])
+    public function __construct(array $conditions = [], array $miscData = [])
     {
-        parent::__construct($conditions);
+        parent::__construct($conditions, $miscData);
 
         if ($this->error)
             return;
@@ -142,12 +145,12 @@ class SpellList extends BaseType
             }
 
             // set full masks to 0
-            $_curTpl['reqClassMask'] &= CLASS_MASK_ALL;
-            if ($_curTpl['reqClassMask'] == CLASS_MASK_ALL)
+            $_curTpl['reqClassMask'] &= ChrClass::MASK_ALL;
+            if ($_curTpl['reqClassMask'] == ChrClass::MASK_ALL)
                 $_curTpl['reqClassMask'] = 0;
 
-            $_curTpl['reqRaceMask'] &= RACE_MASK_ALL;
-            if ($_curTpl['reqRaceMask'] == RACE_MASK_ALL)
+            $_curTpl['reqRaceMask'] &= ChrRace::MASK_ALL;
+            if ($_curTpl['reqRaceMask'] == ChrRace::MASK_ALL)
                 $_curTpl['reqRaceMask'] = 0;
 
             // unpack skillLines
@@ -178,208 +181,33 @@ class SpellList extends BaseType
         }
 
         if ($foo)
-            $this->relItems = new ItemList(array(['i.id', array_unique($foo)], CFG_SQL_LIMIT_NONE));
+            $this->relItems = new ItemList(array(['i.id', array_unique($foo)], Cfg::get('SQL_LIMIT_NONE')));
     }
 
     // use if you JUST need the name
     public static function getName($id)
     {
-        $n = DB::Aowow()->SelectRow('SELECT name_loc0, name_loc2, name_loc3, name_loc4, name_loc6, name_loc8 FROM ?_spell WHERE id = ?d', $id );
-        return Util::localizedString($n, 'name');
+        if ($n = DB::Aowow()->SelectRow('SELECT name_loc0, name_loc2, name_loc3, name_loc4, name_loc6, name_loc8 FROM ?_spell WHERE id = ?d', $id))
+            return Util::localizedString($n, 'name');
+
+        return '';
     }
     // end static use
 
     // required for item-comparison
-    public function getStatGain()
+    public function getStatGain() : array
     {
         $data = [];
 
         foreach ($this->iterate() as $__)
         {
-            $stats = [];
+            $data[$this->id] = new StatsContainer();
 
-            for ($i = 1; $i <= 3; $i++)
-            {
-                $pts = $this->calculateAmountForCurrent($i)[1];
-                $mv  = $this->curTpl['effect'.$i.'MiscValue'];
-                $au  = $this->curTpl['effect'.$i.'AuraId'];
+            foreach ($this->canEnchantmentItem() as $i)
+                $data[$this->id]->fromDB(Type::ENCHANTMENT, $this->curTpl['effect'.$i.'MiscValue']);
 
-                if (in_array($this->curTpl['effect'.$i.'Id'], [SPELL_EFFECT_ENCHANT_ITEM, SPELL_EFFECT_ENCHANT_ITEM_TEMPORARY]))
-                {
-                    if ($mv && ($json = DB::Aowow()->selectRow('SELECT * FROM ?_item_stats WHERE `type` = ?d AND `typeId` = ?d', Type::ENCHANTMENT, $mv)))
-                    {
-                        $mods = [];
-                        foreach ($json as $str => $val)
-                            if ($val && ($idx = array_search($str, Game::$itemMods)))
-                                $mods[$idx] = $val;
-
-                        if ($mods)
-                            Util::arraySumByKey($stats, $mods);
-                    }
-
-                    continue;
-                }
-
-                switch ($au)
-                {
-                    case SPELL_AURA_MOD_STAT:
-                        if ($mv < 0)                        // all stats
-                        {
-                            for ($iMod = ITEM_MOD_AGILITY; $iMod <= ITEM_MOD_STAMINA; $iMod++)
-                                Util::arraySumByKey($stats, [$iMod => $pts]);
-                        }
-                        else if ($mv == STAT_STRENGTH)      // one stat
-                            Util::arraySumByKey($stats, [ITEM_MOD_STRENGTH => $pts]);
-                        else if ($mv == STAT_AGILITY)
-                            Util::arraySumByKey($stats, [ITEM_MOD_AGILITY => $pts]);
-                        else if ($mv == STAT_STAMINA)
-                            Util::arraySumByKey($stats, [ITEM_MOD_STAMINA => $pts]);
-                        else if ($mv == STAT_INTELLECT)
-                            Util::arraySumByKey($stats, [ITEM_MOD_INTELLECT => $pts]);
-                        else if ($mv == STAT_SPIRIT)
-                            Util::arraySumByKey($stats, [ITEM_MOD_SPIRIT => $pts]);
-                        else                                // one bullshit
-                            trigger_error('AuraId 29 of spell #'.$this->id.' has wrong statId #'.$mv, E_USER_WARNING);
-
-                        break;
-                    case SPELL_AURA_MOD_INCREASE_HEALTH:
-                    case SPELL_AURA_MOD_INCREASE_HEALTH_NONSTACK:
-                    case SPELL_AURA_MOD_INCREASE_HEALTH_2:
-                        Util::arraySumByKey($stats, [ITEM_MOD_HEALTH => $pts]);
-                        break;
-                    case SPELL_AURA_MOD_DAMAGE_DONE:
-                        // + weapon damage
-                        if ($mv == (1 << SPELL_SCHOOL_NORMAL))
-                        {
-                            Util::arraySumByKey($stats, [ITEM_MOD_WEAPON_DMG => $pts]);
-                            break;
-                        }
-
-                        // full magic mask, also counts towards healing
-                        if ($mv == SPELL_MAGIC_SCHOOLS)
-                        {
-                            Util::arraySumByKey($stats, [ITEM_MOD_SPELL_POWER       => $pts]);
-                            Util::arraySumByKey($stats, [ITEM_MOD_SPELL_DAMAGE_DONE => $pts]);
-                        }
-                        else
-                        {
-                            // HolySpellpower (deprecated; still used in randomproperties)
-                            if ($mv & (1 << SPELL_SCHOOL_HOLY))
-                                Util::arraySumByKey($stats, [ITEM_MOD_HOLY_POWER   => $pts]);
-
-                            // FireSpellpower (deprecated; still used in randomproperties)
-                            if ($mv & (1 << SPELL_SCHOOL_FIRE))
-                                Util::arraySumByKey($stats, [ITEM_MOD_FIRE_POWER   => $pts]);
-
-                            // NatureSpellpower (deprecated; still used in randomproperties)
-                            if ($mv & (1 << SPELL_SCHOOL_NATURE))
-                                Util::arraySumByKey($stats, [ITEM_MOD_NATURE_POWER => $pts]);
-
-                            // FrostSpellpower (deprecated; still used in randomproperties)
-                            if ($mv & (1 << SPELL_SCHOOL_FROST))
-                                Util::arraySumByKey($stats, [ITEM_MOD_FROST_POWER  => $pts]);
-
-                            // ShadowSpellpower (deprecated; still used in randomproperties)
-                            if ($mv & (1 << SPELL_SCHOOL_SHADOW))
-                                Util::arraySumByKey($stats, [ITEM_MOD_SHADOW_POWER => $pts]);
-
-                            // ArcaneSpellpower (deprecated; still used in randomproperties)
-                            if ($mv & (1 << SPELL_SCHOOL_ARCANE))
-                                Util::arraySumByKey($stats, [ITEM_MOD_ARCANE_POWER => $pts]);
-                        }
-
-                        break;
-                    case SPELL_AURA_MOD_HEALING_DONE:       // not as a mask..
-                        Util::arraySumByKey($stats, [ITEM_MOD_SPELL_HEALING_DONE => $pts]);
-                        break;
-                    case SPELL_AURA_MOD_INCREASE_ENERGY:    // MiscVal:type see defined Powers only energy/mana in use
-                        if ($mv == POWER_HEALTH)
-                            Util::arraySumByKey($stats, [ITEM_MOD_HEALTH      => $pts]);
-                        else if ($mv == POWER_ENERGY)
-                            Util::arraySumByKey($stats, [ITEM_MOD_ENERGY      => $pts]);
-                        else if ($mv == POWER_RAGE)
-                            Util::arraySumByKey($stats, [ITEM_MOD_RAGE        => $pts]);
-                        else if ($mv == POWER_MANA)
-                            Util::arraySumByKey($stats, [ITEM_MOD_MANA        => $pts]);
-                        else if ($mv == POWER_RUNIC_POWER)
-                            Util::arraySumByKey($stats, [ITEM_MOD_RUNIC_POWER => $pts]);
-
-                        break;
-                    case SPELL_AURA_MOD_RATING:
-                    case SPELL_AURA_MOD_RATING_FROM_STAT:
-                        if ($mod = Game::itemModByRatingMask($mv))
-                            Util::arraySumByKey($stats, [$mod => $pts]);
-                        break;
-                    case SPELL_AURA_MOD_RESISTANCE_EXCLUSIVE:
-                    case SPELL_AURA_MOD_BASE_RESISTANCE:
-                    case SPELL_AURA_MOD_RESISTANCE:
-                        // Armor only if explicitly specified
-                        if ($mv == (1 << SPELL_SCHOOL_NORMAL))
-                        {
-                            Util::arraySumByKey($stats, [ITEM_MOD_ARMOR => $pts]);
-                            break;
-                        }
-
-                        // Holy resistance only if explicitly specified (shouldn't even exist...?)
-                        if ($mv == (1 << SPELL_SCHOOL_HOLY))
-                        {
-                            Util::arraySumByKey($stats, [ITEM_MOD_HOLY_RESISTANCE => $pts]);
-                            break;
-                        }
-
-                        for ($j = 0; $j < 7; $j++)
-                        {
-                            if (($mv & (1 << $j)) == 0)
-                                continue;
-
-                            switch ($j)
-                            {
-                                case SPELL_SCHOOL_FIRE:
-                                    Util::arraySumByKey($stats, [ITEM_MOD_FIRE_RESISTANCE   => $pts]);
-                                    break;
-                                case SPELL_SCHOOL_NATURE:
-                                    Util::arraySumByKey($stats, [ITEM_MOD_NATURE_RESISTANCE => $pts]);
-                                    break;
-                                case SPELL_SCHOOL_FROST:
-                                    Util::arraySumByKey($stats, [ITEM_MOD_FROST_RESISTANCE  => $pts]);
-                                    break;
-                                case SPELL_SCHOOL_SHADOW:
-                                    Util::arraySumByKey($stats, [ITEM_MOD_SHADOW_RESISTANCE => $pts]);
-                                    break;
-                                case SPELL_SCHOOL_ARCANE:
-                                    Util::arraySumByKey($stats, [ITEM_MOD_ARCANE_RESISTANCE => $pts]);
-                                    break;
-                            }
-                        }
-                        break;
-                    case SPELL_AURA_PERIODIC_HEAL:          // hp5
-                    case SPELL_AURA_MOD_REGEN:
-                    case SPELL_AURA_MOD_HEALTH_REGEN_IN_COMBAT:
-                        Util::arraySumByKey($stats, [ITEM_MOD_HEALTH_REGEN        => $pts]);
-                        break;
-                    case SPELL_AURA_MOD_POWER_REGEN:        // mp5
-                        Util::arraySumByKey($stats, [ITEM_MOD_MANA_REGENERATION   => $pts]);
-                        break;
-                    case SPELL_AURA_MOD_ATTACK_POWER:
-                        Util::arraySumByKey($stats, [ITEM_MOD_ATTACK_POWER        => $pts]);
-                        break;                              // ?carries over to rngatkpwr?
-                    case SPELL_AURA_MOD_RANGED_ATTACK_POWER:
-                        Util::arraySumByKey($stats, [ITEM_MOD_RANGED_ATTACK_POWER => $pts]);
-                        break;
-                    case SPELL_AURA_MOD_SHIELD_BLOCKVALUE:
-                        Util::arraySumByKey($stats, [ITEM_MOD_BLOCK_VALUE         => $pts]);
-                        break;
-                    case SPELL_AURA_MOD_EXPERTISE:
-                        Util::arraySumByKey($stats, [ITEM_MOD_EXPERTISE_RATING    => $pts]);
-                        break;
-                    case SPELL_AURA_MOD_TARGET_RESISTANCE:
-                        if ($mv == 0x7C && $pts < 0)
-                            Util::arraySumByKey($stats, [ITEM_MOD_SPELL_PENETRATION => -$pts]);
-                        break;
-                }
-            }
-
-            $data[$this->id] = $stats;
+            // todo: should enchantments be included here...?
+            $data[$this->id]->fromSpell($this->curTpl);
         }
 
         return $data;
@@ -390,21 +218,10 @@ class SpellList extends BaseType
         // weapon hand check: param: slot, class, subclass, value
         $whCheck = '$function() { var j, w = _inventory.getInventory()[%d]; if (!w[0] || !g_items[w[0]]) { return 0; } j = g_items[w[0]].jsonequip; return (j.classs == %d && (%d & (1 << (j.subclass)))) ? %d : 0; }';
 
-        $data = $this->getStatGain();                       // flat gains
-        foreach ($data as $id => &$spellData)
+        $data = [];                       // flat gains
+        foreach ($this->getStatGain() as $id => $spellData)
         {
-            foreach ($spellData as $modId => $val)
-            {
-                if (!isset(Game::$itemMods[$modId]))
-                    continue;
-
-                if ($modId == ITEM_MOD_EXPERTISE_RATING)    // not a rating .. pure expertise
-                    $spellData['exp'] = $val;
-                else
-                    $spellData[Game::$itemMods[$modId]] = $val;
-
-                unset($spellData[$modId]);
-            }
+            $data[$id] = $spellData->toJson(STAT::FLAG_ITEM | STAT::FLAG_PROFILER);
 
             // apply weapon restrictions
             $this->getEntry($id);
@@ -414,8 +231,8 @@ class SpellList extends BaseType
             if ($class != ITEM_CLASS_WEAPON || !$subClass)
                 continue;
 
-            foreach ($spellData as $json => $pts)
-                $spellData[$json] = [1, 'functionOf', sprintf($whCheck, $slot, $class, $subClass, $pts)];
+            foreach ($data[$id] as $key => $amt)
+                $data[$id][$key] = [1, 'functionOf', sprintf($whCheck, $slot, $class, $subClass, $amt)];
         }
 
         // 4 possible modifiers found
@@ -470,20 +287,15 @@ class SpellList extends BaseType
 
         foreach ($this->iterate() as $id => $__)
         {
-            // Priest: Spirit of Redemption is a spell but also a passive. *yaaayyyy*
-            if (($this->getField('cuFlags') & SPELL_CU_TALENTSPELL) && $id != 20711)
+            // kept for reference - if (($this->getField('cuFlags') & SPELL_CU_TALENTSPELL) && $id != 20711)
+            if (!($this->getField('attributes0') & SPELL_ATTR0_PASSIVE))
                 continue;
 
-            // curious cases of OH MY FUCKING GOD WHY?!
-            if ($id == 16268)                               // Shaman - Spirit Weapons (parry is normaly stored in g_statistics)
+            // Shaman - Spirit Weapons (16268) (parry is normaly stored in g_statistics)
+            // i should recurse into SPELL_EFFECT_LEARN_SPELL and apply SPELL_EFFECT_PARRY from there
+            if ($id == 16268)
             {
                 $data[$id]['parrypct'] = [5, 'add'];
-                continue;
-            }
-
-            if ($id == 20550)                               // Tauren - Endurance (dependant on base health) ... if you are looking for something elegant, look away!
-            {
-                $data[$id]['health'] = [0.05, 'functionOf', '$function(p) { return g_statistics.combo[p.classs][p.level][5]; }'];
                 continue;
             }
 
@@ -524,7 +336,9 @@ class SpellList extends BaseType
                             $modXByStat($data[$id], null, $pts);
                         else if ($mv < 0)                   // all stats
                             for ($iMod = ITEM_MOD_AGILITY; $iMod <= ITEM_MOD_STAMINA; $iMod++)
-                                $data[$id][Game::$itemMods[$iMod]] = [$pts / 100, 'percentOf', Game::$itemMods[$iMod]];
+                                if ($idx = Stat::getIndexFrom(Stat::IDX_ITEM_MOD, $iMod))
+                                    if ($key = Stat::getJsonString($idx))
+                                        $data[$id][$key] = [$pts / 100, 'percentOf', $key];
                         break;
                     case SPELL_AURA_MOD_SPELL_DAMAGE_OF_STAT_PERCENT:
                         $mv = $mv ?: SPELL_MAGIC_SCHOOLS;
@@ -579,14 +393,17 @@ class SpellList extends BaseType
                         else if ($mv == POWER_ENERGY)
                             $data[$id]['energy'] = [$pts / 100, 'percentOf', 'energy'];
                         else if ($mv == POWER_MANA)
-                            $data[$id]['mana'] = [$pts / 100, 'percentOf', 'mana'];
+                            $data[$id]['mana']   = [$pts / 100, 'percentOf', 'mana'];
                         else if ($mv == POWER_RAGE)
-                            $data[$id]['rage'] = [$pts / 100, 'percentOf', 'rage'];
+                            $data[$id]['rage']   = [$pts / 100, 'percentOf', 'rage'];
                         else if ($mv == POWER_RUNIC_POWER)
-                            $data[$id]['runic'] = [$pts / 100, 'percentOf', 'runic'];
+                            $data[$id]['runic']  = [$pts / 100, 'percentOf', 'runic'];
                         break;
                     case SPELL_AURA_MOD_INCREASE_HEALTH_PERCENT:
                         $data[$id]['health'] = [$pts / 100, 'percentOf', 'health'];
+                        break;
+                    case SPELL_AURA_MOD_BASE_HEALTH_PCT:    // only Tauren - Endurance (20550) ... if you are looking for something elegant, look away!
+                        $data[$id]['health'] = [$pts / 100, 'functionOf', '$function(p) { return g_statistics.combo[p.classs][p.level][5]; }'];
                         break;
                     case SPELL_AURA_MOD_SHIELD_BLOCKVALUE_PCT:
                         $data[$id]['block'] = [$pts / 100, 'percentOf', 'block'];
@@ -603,7 +420,7 @@ class SpellList extends BaseType
                     case SPELL_AURA_MOD_SPELL_HEALING_OF_ATTACK_POWER:
                         $data[$id]['splheal'] = [$pts / 100, 'percentOf', 'mleatkpwr'];
                         break;
-                    case SPELL_AURA_MOD_ATTACK_POWER_PCT:   // ingmae only melee..?
+                    case SPELL_AURA_MOD_ATTACK_POWER_PCT:   // ingame only melee..?
                         $data[$id]['mleatkpwr'] = [$pts / 100, 'percentOf', 'mleatkpwr'];
                         break;
                     case SPELL_AURA_MOD_HEALTH_REGEN_PERCENT:
@@ -669,9 +486,10 @@ class SpellList extends BaseType
         return $this->tools;
     }
 
-    public function getModelInfo($spellId = 0, $effIdx = 0)
+    public function getModelInfo(int $spellId = 0, int $effIdx = 0) : array
     {
-        $displays = [0 => []];
+        $displays = $results = [];
+
         foreach ($this->iterate() as $id => $__)
         {
             if ($spellId && $spellId != $id)
@@ -679,6 +497,9 @@ class SpellList extends BaseType
 
             for ($i = 1; $i < 4; $i++)
             {
+                if ($spellId && $effIdx && $effIdx != $i)
+                    continue;
+
                 $effMV = $this->curTpl['effect'.$i.'MiscValue'];
                 if (!$effMV)
                     continue;
@@ -709,24 +530,22 @@ class SpellList extends BaseType
                         2289 => [2289, 29415, 29418, 29419, 29420, 29421]   // Bear - Tauren
                     );
 
-                    if ($st = DB::Aowow()->selectRow('SELECT *, displayIdA as model1, displayIdH as model2 FROM ?_shapeshiftforms WHERE id = ?d', $effMV))
+                    if ($st = DB::Aowow()->selectRow('SELECT *, `displayIdA` AS `model1`, `displayIdH` AS `model2` FROM ?_shapeshiftforms WHERE `id` = ?d', $effMV))
                     {
                         foreach ([1, 2] as $j)
                             if (isset($subForms[$st['model'.$j]]))
                                 $st['model'.$j] = $subForms[$st['model'.$j]][array_rand($subForms[$st['model'.$j]])];
 
-                        $displays[0][$id][$i] = array(
-                            'typeId'       => 0,
-                            'displayId'    => $st['model2'] ? $st['model'.rand(1, 2)] : $st['model1'],
+                        $results[$id][$i] = array(
+                            'type'         => Type::NPC,
                             'creatureType' => $st['creatureType'],
+                            'displayId'    => $st['model2'] ? $st['model'.rand(1, 2)] : $st['model1'],
                             'displayName'  => Lang::game('st', $effMV)
                         );
                     }
                 }
             }
         }
-
-        $results = $displays[0];
 
         if (!empty($displays[Type::NPC]))
         {
@@ -740,6 +559,7 @@ class SpellList extends BaseType
                         foreach ($indizes as $idx)
                         {
                             $res = array(
+                                'type'        => Type::NPC,
                                 'typeId'      => $nId,
                                 'displayId'   => $nModels->getRandomModelId(),
                                 'displayName' => $nModels->getField('name', true)
@@ -767,6 +587,7 @@ class SpellList extends BaseType
                         foreach ($indizes as $idx)
                         {
                             $results[$srcId][$idx] = array(
+                                'type'        => Type::OBJECT,
                                 'typeId'      => $oId,
                                 'displayId'   => $oModels->getField('displayId'),
                                 'displayName' => $oModels->getField('name', true)
@@ -778,12 +599,15 @@ class SpellList extends BaseType
         }
 
         if ($spellId && $effIdx)
-            return !empty($results[$spellId][$effIdx]) ? $results[$spellId][$effIdx] : 0;
+            return $results[$spellId][$effIdx] ?? [];
+
+        if ($spellId)
+            return $results[$spellId] ?? [];
 
         return $results;
     }
 
-    private function createRangesForCurrent()
+    private function createRangesForCurrent() : string
     {
         if (!$this->curTpl['rangeMaxHostile'])
             return '';
@@ -805,7 +629,7 @@ class SpellList extends BaseType
             return sprintf(Lang::spell('range'), $this->curTpl['rangeMaxHostile']);
     }
 
-    public function createPowerCostForCurrent()
+    public function createPowerCostForCurrent() : string
     {
         $str = '';
 
@@ -849,12 +673,12 @@ class SpellList extends BaseType
         return $str;
     }
 
-    public function createCastTimeForCurrent($short = true, $noInstant = true)
+    public function createCastTimeForCurrent(bool $short = true, bool $noInstant = true) : string
     {
         if (!$this->curTpl['castTime'] && $this->isChanneledSpell())
             return Lang::spell('channeled');
         // SPELL_ATTR0_ABILITY instant ability.. yeah, wording thing only (todo (low): rule is imperfect)
-        else if (!$this->curTpl['castTime'] && ($this->curTpl['damageClass'] != 1 || $this->curTpl['attributes0'] & SPELL_ATTR0_ABILITY))
+        else if (!$this->curTpl['castTime'] && ($this->curTpl['damageClass'] != SPELL_DAMAGE_CLASS_MAGIC || $this->curTpl['attributes0'] & SPELL_ATTR0_ABILITY))
             return Lang::spell('instantPhys');
         // show instant only for player/pet/npc abilities (todo (low): unsure when really hidden (like talent-case))
         else if ($noInstant && !in_array($this->curTpl['typeCat'], [11, 7, -3, -6, -8, 0]) && !($this->curTpl['cuFlags'] & SPELL_CU_TALENTSPELL))
@@ -863,7 +687,7 @@ class SpellList extends BaseType
             return $short ? Lang::formatTime($this->curTpl['castTime'] * 1000, 'spell', 'castTime') : Util::formatTime($this->curTpl['castTime'] * 1000);
     }
 
-    private function createCooldownForCurrent()
+    private function createCooldownForCurrent() : string
     {
         if ($this->curTpl['recoveryTime'])
             return Lang::formatTime($this->curTpl['recoveryTime'], 'spell', 'cooldown');
@@ -874,16 +698,15 @@ class SpellList extends BaseType
     }
 
     // formulae base from TC
-    private function calculateAmountForCurrent(int $effIdx, ?SpellList $altTpl = null, int $nTicks = 1) : array
+    private function calculateAmountForCurrent(int $effIdx, int $nTicks = 1) : array
     {
-        $ref     = $altTpl ?: $this;
         $level   = $this->charLevel;
         $maxBase = 0;
-        $rppl    = $ref->getField('effect'.$effIdx.'RealPointsPerLevel');
-        $base    = $ref->getField('effect'.$effIdx.'BasePoints');
-        $add     = $ref->getField('effect'.$effIdx.'DieSides');
-        $maxLvl  = $ref->getField('maxLevel');
-        $baseLvl = $ref->getField('baseLevel');
+        $rppl    = $this->getField('effect'.$effIdx.'RealPointsPerLevel');
+        $base    = $this->getField('effect'.$effIdx.'BasePoints');
+        $add     = $this->getField('effect'.$effIdx.'DieSides');
+        $maxLvl  = $this->getField('maxLevel');
+        $baseLvl = $this->getField('baseLevel');
 
         if ($rppl)
         {
@@ -892,8 +715,8 @@ class SpellList extends BaseType
             else if ($level < $baseLvl)
                 $level = $baseLvl;
 
-            if (!$ref->getField('atributes0') & SPELL_ATTR0_PASSIVE)
-                $level -= $ref->getField('spellLevel');
+            if (!$this->getField('atributes0') & SPELL_ATTR0_PASSIVE)
+                $level -= $this->getField('spellLevel');
 
             $maxBase += (int)(($level - $baseLvl) * $rppl);
             $maxBase *= $nTicks;
@@ -910,7 +733,7 @@ class SpellList extends BaseType
         ];
     }
 
-    public function canCreateItem()
+    public function canCreateItem() : array
     {
         $idx = [];
         for ($i = 1; $i < 4; $i++)
@@ -921,7 +744,7 @@ class SpellList extends BaseType
         return $idx;
     }
 
-    public function canTriggerSpell()
+    public function canTriggerSpell() : array
     {
         $idx = [];
         for ($i = 1; $i < 4; $i++)
@@ -932,13 +755,23 @@ class SpellList extends BaseType
         return $idx;
     }
 
-    public function canTeachSpell()
+    public function canTeachSpell() : array
     {
         $idx = [];
         for ($i = 1; $i < 4; $i++)
             if (in_array($this->curTpl['effect'.$i.'Id'], SpellList::EFFECTS_TEACH))
                 if ($this->curTpl['effect'.$i.'TriggerSpell'] > 0)
                     $idx[] = $i;
+
+        return $idx;
+    }
+
+    public function canEnchantmentItem() : array
+    {
+        $idx = [];
+        for ($i = 1; $i < 4; $i++)
+            if (in_array($this->curTpl['effect'.$i.'Id'], SpellList::EFFECTS_ENCHANTMENT))
+                $idx[] = $i;
 
         return $idx;
     }
@@ -1129,18 +962,22 @@ class SpellList extends BaseType
     }
 
     // description-, buff-parsing component
-    // returns [min, max, minFulltext, maxFulltext, ratingId]
-    private function resolveVariableString($varParts)
+    private function resolveVariableString(array $varParts) : array
     {
         $signs  = ['+', '-', '/', '*', '%', '^'];
 
         foreach ($varParts as $k => $v)
             $$k = $v;
 
-        $result = [null];
+        // returns
+        $minPoints    = null;
+        $maxPoints    = null;
+        $fmtStringMin = null;
+        $fmtStringMax = null;
+        $statId       = null;
 
         if (!$var)
-            return $result;
+            return [null, null, null, null, null];
 
         if (!$effIdx)                                       // if EffectIdx is omitted, assume EffectIdx: 1
             $effIdx = 1;
@@ -1151,7 +988,7 @@ class SpellList extends BaseType
 
         $srcSpell = $lookup && $lookup != $this->id ? $this->refSpells[$lookup] : $this;
         if ($srcSpell->error)
-            return $result;
+            return [null, null, null, null, null];
 
         switch ($var)
         {
@@ -1162,7 +999,7 @@ class SpellList extends BaseType
                 if (in_array($op, $signs) && is_numeric($oparg) && is_numeric($base))
                     eval("\$base = $base $op $oparg;");
 
-                $result[0] = $base;
+                $minPoints = $base;
                 break;
             case 'b':                                       // PointsPerComboPoint
             case 'B':
@@ -1171,18 +1008,18 @@ class SpellList extends BaseType
                 if (in_array($op, $signs) && is_numeric($oparg) && is_numeric($base))
                     eval("\$base = $base $op $oparg;");
 
-                $result[0] = $base;
+                $minPoints = $base;
                 break;
             case 'd':                                       // SpellDuration
             case 'D':                                       // todo (med): min/max?; /w unit?
                 $base = $srcSpell->getField('duration');
 
-                $result[2] = Lang::formatTime($srcSpell->getField('duration'), 'spell', 'duration');
+                $fmtStringMin = Lang::formatTime($srcSpell->getField('duration'), 'spell', 'duration');
 
                 if (in_array($op, $signs) && is_numeric($oparg) && is_numeric($base))
                     eval("\$base = $base $op $oparg;");
 
-                $result[0] = $base < 0 ? 0 : $base;
+                $minPoints = $base < 0 ? 0 : $base;
                 break;
             case 'e':                                       // EffectValueMultiplier
             case 'E':
@@ -1191,7 +1028,7 @@ class SpellList extends BaseType
                 if (in_array($op, $signs) && is_numeric($oparg) && is_numeric($base))
                     eval("\$base = $base $op $oparg;");
 
-                $result[0] = $base;
+                $minPoints = $base;
                 break;
             case 'f':                                       // EffectDamageMultiplier
             case 'F':
@@ -1200,11 +1037,11 @@ class SpellList extends BaseType
                 if (in_array($op, $signs) && is_numeric($oparg) && is_numeric($base))
                     eval("\$base = $base $op $oparg;");
 
-                $result[0] = $base;
+                $minPoints = $base;
                 break;
             case 'g':                                       // boolean choice with casters gender as condition $gX:Y;
             case 'G':
-                $result[2] = '&lt;'.$switch[0].'/'.$switch[1].'&gt;';
+                $fmtStringMin = '&lt;'.$switch[0].'/'.$switch[1].'&gt;';
                 break;
             case 'h':                                       // ProcChance
             case 'H':
@@ -1213,7 +1050,7 @@ class SpellList extends BaseType
                 if (in_array($op, $signs) && is_numeric($oparg) && is_numeric($base))
                     eval("\$base = $base $op $oparg;");
 
-                $result[0] = $base;
+                $minPoints = $base;
                 break;
             case 'i':                                       // MaxAffectedTargets
             case 'I':
@@ -1222,16 +1059,16 @@ class SpellList extends BaseType
                 if (in_array($op, $signs) && is_numeric($oparg) && is_numeric($base))
                     eval("\$base = $base $op $oparg;");
 
-                $result[0] = $base;
+                $minPoints = $base;
                 break;
             case 'l':                                       // boolean choice with last value as condition $lX:Y;
             case 'L':
                 // resolve later by backtracking
-                $result[2] = '$l'.$switch[0].':'.$switch[1].';';
+                $fmtStringMin = '$l'.$switch[0].':'.$switch[1].';';
                 break;
             case 'm':                                       // BasePoints (minValue)
             case 'M':                                       // BasePoints (maxValue)
-                [$min, $max, $modStrMin, $modStrMax] = $this->calculateAmountForCurrent($effIdx, $srcSpell);
+                [$min, $max, $modStrMin, $modStrMax] = $srcSpell->calculateAmountForCurrent($effIdx);
 
                 $mv   = $srcSpell->getField('effect'.$effIdx.'MiscValue');
                 $aura = $srcSpell->getField('effect'.$effIdx.'AuraId');
@@ -1243,25 +1080,25 @@ class SpellList extends BaseType
                 }
 
                 // Aura giving combat ratings
-                $rType = 0;
+                $stats = [];
                 if ($aura == SPELL_AURA_MOD_RATING)
-                    if ($rType = Game::itemModByRatingMask($mv))
+                    if ($stats = StatsContainer::convertCombatRating($mv))
                         $this->scaling[$this->id] = true;
                 // Aura end
 
-                if ($rType)
+                if ($stats)
                 {
-                    $result[2] = '<!--rtg%s-->%s&nbsp;<small>(%s)</small>';
-                    $result[4] = $rType;
+                    $fmtStringMin = '<!--rtg%s-->%s&nbsp;<small>(%s)</small>';
+                    $statId = $stats[0];                    // could be multiple ratings in theory, but not expected to be
                 }
 /*  todo: export to and solve formulas in javascript e.g.: spell 10187 - ${$42213m1*8*$<mult>} with $mult = ${${$?s31678[${1.05}][${${$?s31677[${1.04}][${${$?s31676[${1.03}][${${$?s31675[${1.02}][${${$?s31674[${1.01}][${1}]}}]}}]}}]}}]}*${$?s12953[${1.06}][${${$?s12952[${1.04}][${${$?s11151[${1.02}][${1}]}}]}}]}}
                 else if ($this->interactive && ($modStrMin || $modStrMax))
                 {
                     $this->scaling[$this->id] = true;
-                    $result[2] = $modStrMin.'%s';
+                    $fmtStringMin = $modStrMin.'%s';
                 }
 */
-                $result[0] = ctype_lower($var) ? $min : $max;
+                $minPoints = ctype_lower($var) ? $min : $max;
                 break;
             case 'n':                                       // ProcCharges
             case 'N':
@@ -1270,7 +1107,7 @@ class SpellList extends BaseType
                 if (in_array($op, $signs) && is_numeric($oparg) && is_numeric($base))
                     eval("\$base = $base $op $oparg;");
 
-                $result[0] = $base;
+                $minPoints = $base;
                 break;
             case 'o':                                       // TotalAmount for periodic auras (with variance)
             case 'O':
@@ -1287,7 +1124,7 @@ class SpellList extends BaseType
                         $periode = 3000;
                 }
 
-                [$min, $max, $modStrMin, $modStrMax] = $this->calculateAmountForCurrent($effIdx, $srcSpell, intVal($duration / $periode));
+                [$min, $max, $modStrMin, $modStrMax] = $srcSpell->calculateAmountForCurrent($effIdx, intVal($duration / $periode));
 
                 if (in_array($op, $signs) && is_numeric($oparg))
                 {
@@ -1299,12 +1136,12 @@ class SpellList extends BaseType
                 {
                     $this->scaling[$this->id] = true;
 
-                    $result[2] = $modStrMin.'%s';
-                    $result[3] = $modStrMax.'%s';
+                    $fmtStringMin = $modStrMin.'%s';
+                    $fmtStringMax = $modStrMax.'%s';
                 }
 
-                $result[0] = $min;
-                $result[1] = $max;
+                $minPoints = $min;
+                $maxPoints = $max;
                 break;
             case 'q':                                       // EffectMiscValue
             case 'Q':
@@ -1313,7 +1150,7 @@ class SpellList extends BaseType
                 if (in_array($op, $signs) && is_numeric($oparg) && is_numeric($base))
                     eval("\$base = $base $op $oparg;");
 
-                $result[0] = $base;
+                $minPoints = $base;
                 break;
             case 'r':                                       // SpellRange
             case 'R':
@@ -1322,11 +1159,11 @@ class SpellList extends BaseType
                 if (in_array($op, $signs) && is_numeric($oparg) && is_numeric($base))
                     eval("\$base = $base $op $oparg;");
 
-                $result[0] = $base;
+                $minPoints = $base;
                 break;
             case 's':                                       // BasePoints (with variance)
             case 'S':
-                [$min, $max, $modStrMin, $modStrMax] = $this->calculateAmountForCurrent($effIdx, $srcSpell);
+                [$min, $max, $modStrMin, $modStrMax] = $srcSpell->calculateAmountForCurrent($effIdx);
                 $mv   = $srcSpell->getField('effect'.$effIdx.'MiscValue');
                 $aura = $srcSpell->getField('effect'.$effIdx.'AuraId');
 
@@ -1336,26 +1173,26 @@ class SpellList extends BaseType
                     eval("\$max = $max $op $oparg;");
                 }
                 // Aura giving combat ratings
-                $rType = 0;
+                $stats = [];
                 if ($aura == SPELL_AURA_MOD_RATING)
-                    if ($rType = Game::itemModByRatingMask($mv))
+                    if ($stats = StatsContainer::convertCombatRating($mv))
                         $this->scaling[$this->id] = true;
                 // Aura end
 
-                if ($rType)
+                if ($stats)
                 {
-                    $result[2] = '<!--rtg%s-->%s&nbsp;<small>(%s)</small>';
-                    $result[4] = $rType;
+                    $fmtStringMin = '<!--rtg%s-->%s&nbsp;<small>(%s)</small>';
+                    $statId = $stats[0];                    // could be multiple ratings in theory, but not expected to be
                 }
                 else if (($modStrMin || $modStrMax) && $this->interactive)
                 {
                     $this->scaling[$this->id] = true;
-                    $result[2] = $modStrMin.'%s';
-                    $result[3] = $modStrMax.'%s';
+                    $fmtStringMin = $modStrMin.'%s';
+                    $fmtStringMax = $modStrMax.'%s';
                 }
 
-                $result[0] = $min;
-                $result[1] = $max;
+                $minPoints = $min;
+                $maxPoints = $max;
                 break;
             case 't':                                       // Periode
             case 'T':
@@ -1364,7 +1201,7 @@ class SpellList extends BaseType
                 if (in_array($op, $signs) && is_numeric($oparg) && is_numeric($base))
                     eval("\$base = $base $op $oparg;");
 
-                $result[0] = $base;
+                $minPoints = $base;
                 break;
             case 'u':                                       // StackCount
             case 'U':
@@ -1373,7 +1210,7 @@ class SpellList extends BaseType
                 if (in_array($op, $signs) && is_numeric($oparg) && is_numeric($base))
                     eval("\$base = $base $op $oparg;");
 
-                $result[0] = $base;
+                $minPoints = $base;
                 break;
             case 'v':                                       // MaxTargetLevel
             case 'V':
@@ -1382,7 +1219,7 @@ class SpellList extends BaseType
                 if (in_array($op, $signs) && is_numeric($oparg) && is_numeric($base))
                     eval("\$base = $base $op $oparg;");
 
-                $result[0] = $base;
+                $minPoints = $base;
                 break;
             case 'x':                                       // ChainTargetCount
             case 'X':
@@ -1391,27 +1228,27 @@ class SpellList extends BaseType
                 if (in_array($op, $signs) && is_numeric($oparg) && is_numeric($base))
                     eval("\$base = $base $op $oparg;");
 
-                $result[0] = $base;
+                $minPoints = $base;
                 break;
             case 'z':                                       // HomeZone
-                $result[2] = Lang::spell('home');
+                $fmtStringMin = Lang::spell('home');
                 break;
         }
 
         // handle excessively precise floats
-        if (is_float($result[0]))
-            $result[0] = round($result[0], 2);
-        if (isset($result[1]) && is_float($result[1]))
-            $result[1] = round($result[1], 2);
+        if (is_float($minPoints))
+            $minPoints = round($minPoints, 2);
+        if (isset($maxPoints) && is_float($maxPoints))
+            $maxPoints = round($maxPoints, 2);
 
-        return $result;                                     // minPoints, maxPoints, fmtStringMin, fmtStringMax, combatRatingId
+        return [$minPoints, $maxPoints, $fmtStringMin, $fmtStringMax, $statId];
     }
 
     // description-, buff-parsing component
-    private function resolveFormulaString($formula, $precision = 0)
+    private function resolveFormulaString(string $formula, int $precision = 0)
     {
         $fSuffix = '%s';
-        $fRating = 0;
+        $fStat   = 0;
 
         // step 1: formula unpacking redux
         while (($formStartPos = strpos($formula, '${')) !== false)
@@ -1447,7 +1284,7 @@ class SpellList extends BaseType
                 ++$formCurPos;                              // for some odd reason the precision decimal survives if we dont increment further..
             }
 
-            [$formOutStr, $fSuffix, $fRating] = $this->resolveFormulaString($formOutStr, $formPrecision);
+            [$formOutStr, $fSuffix, $fStat] = $this->resolveFormulaString($formOutStr, $formPrecision);
 
             $formula = substr_replace($formula, $formOutStr, $formStartPos, ($formCurPos - $formStartPos));
         }
@@ -1481,34 +1318,34 @@ class SpellList extends BaseType
             $pos += $len;
 
             // we are resolving a formula -> omit ranges
-            $var = $this->resolveVariableString($varParts);
+            [$minPoints, , $fmtStringMin, , $statId] = $this->resolveVariableString($varParts);
 
             // time within formula -> rebase to seconds and omit timeUnit
             if (strtolower($varParts['var']) == 'd')
             {
-               $var[0] /= 1000;
-               unset($var[2]);
+               $minPoints /= 1000;
+               unset($fmtStringMin);
             }
 
-            $str .= $var[0];
+            $str .= $minPoints;
 
             // overwrite eventually inherited strings
-            if (isset($var[2]))
-                $fSuffix = $var[2];
+            if (isset($fmtStringMin))
+                $fSuffix = $fmtStringMin;
 
-            // overwrite eventually inherited ratings
-            if (isset($var[4]))
-                $fRating = $var[4];
+            // overwrite eventually inherited stat
+            if (isset($statId))
+                $fStat = $statId;
         }
         $str .= substr($formula, $pos);
-        $str  = str_replace('#', '$', $str);                // reset marks
+        $str  = str_replace('#', '$', $str);                // reset markers
 
         // step 3: try to evaluate result
         $evaled = $this->resolveEvaluation($str);
 
         $return = is_numeric($evaled) ? round($evaled, $precision) : $evaled;
 
-        return [$return, $fSuffix, $fRating];
+        return [$return, $fSuffix, $fStat];
     }
 
     // should probably used only once to create ?_spell. come to think of it, it yields the same results every time.. it absolutely has to!
@@ -1599,8 +1436,8 @@ class SpellList extends BaseType
         $this->charLevel   = $level;
 
     // step -1: already handled?
-        if (isset($this->parsedText[$this->id][$type][User::$localeId][$this->charLevel][(int)$this->interactive]))
-            return $this->parsedText[$this->id][$type][User::$localeId][$this->charLevel][(int)$this->interactive];
+        if (isset($this->parsedText[$this->id][$type][Lang::getLocale()->value][$this->charLevel][(int)$this->interactive]))
+            return $this->parsedText[$this->id][$type][Lang::getLocale()->value][$this->charLevel][(int)$this->interactive];
 
     // step 0: get text
         $data = $this->getField($type, true);
@@ -1659,7 +1496,7 @@ class SpellList extends BaseType
     // step 4: find and eliminate regular variables
         $data = $this->handleVariables($data, true);
 
-    // step 5: variable-dependant variable-text
+    // step 5: variable-dependent variable-text
         // special case $lONE:ELSE[:ELSE2]; or $|ONE:ELSE[:ELSE2];
         while (preg_match('/([\d\.]+)([^\d]*)(\$[l|]:*)([^:]*):([^;]*);/i', $data, $m))
         {
@@ -1706,7 +1543,7 @@ class SpellList extends BaseType
         $data = strtr($data, ["\r" => '', "\n" => '<br />']);
 
         // cache result
-        $this->parsedText[$this->id][$type][User::$localeId][$this->charLevel][(int)$this->interactive] = [$data, $relSpells, $this->scaling[$this->id]];
+        $this->parsedText[$this->id][$type][Lang::getLocale()->value][$this->charLevel][(int)$this->interactive] = [$data, $relSpells, $this->scaling[$this->id]];
 
         return [$data, $relSpells, $this->scaling[$this->id]];
     }
@@ -1750,12 +1587,12 @@ class SpellList extends BaseType
                 $formPrecision = $data[$formCurPos + 1];
                 $formCurPos += 2;
             }
-            [$formOutVal, $formOutStr, $ratingId] = $this->resolveFormulaString($formOutStr, $formPrecision ?: ($topLevel ? 0 : 10));
+            [$formOutVal, $formOutStr, $statId] = $this->resolveFormulaString($formOutStr, $formPrecision ?: ($topLevel ? 0 : 10));
 
-            if ($ratingId && Util::checkNumeric($formOutVal) && $this->interactive)
-                $resolved = sprintf($formOutStr, $ratingId, abs($formOutVal), sprintf(Util::$setRatingLevelString, $this->charLevel, $ratingId, abs($formOutVal), Util::setRatingLevel($this->charLevel, $ratingId, abs($formOutVal))));
-            else if ($ratingId && Util::checkNumeric($formOutVal))
-                $resolved = sprintf($formOutStr, $ratingId, abs($formOutVal), Util::setRatingLevel($this->charLevel, $ratingId, abs($formOutVal)));
+            if ($statId && Util::checkNumeric($formOutVal) && $this->interactive)
+                $resolved = sprintf($formOutStr, $statId, abs($formOutVal), sprintf(Util::$setRatingLevelString, $this->charLevel, $statId, abs($formOutVal), Util::setRatingLevel($this->charLevel, $statId, abs($formOutVal))));
+            else if ($statId && Util::checkNumeric($formOutVal))
+                $resolved = sprintf($formOutStr, $statId, abs($formOutVal), Util::setRatingLevel($this->charLevel, $statId, abs($formOutVal)));
             else
                 $resolved = sprintf($formOutStr, Util::checkNumeric($formOutVal) ? abs($formOutVal) : $formOutVal);
 
@@ -1788,23 +1625,23 @@ class SpellList extends BaseType
 
             $pos += $len;
 
-            $var = $this->resolveVariableString($varParts);
-            $resolved = is_numeric($var[0]) ? abs($var[0]) : $var[0];
-            if (isset($var[2]))
+            [$minPoints, $maxPoints, $fmtStringMin, $fmtStringMax, $statId] = $this->resolveVariableString($varParts);
+            $resolved = is_numeric($minPoints) ? abs($minPoints) : $minPoints;
+            if (isset($fmtStringMin))
             {
-                if (isset($var[4]) && $this->interactive)
-                    $resolved = sprintf($var[2], $var[4], abs($var[0]), sprintf(Util::$setRatingLevelString, $this->charLevel, $var[4], abs($var[0]), Util::setRatingLevel($this->charLevel, $var[4], abs($var[0]))));
-                else if (isset($var[4]))
-                    $resolved = sprintf($var[2], $var[4], abs($var[0]), Util::setRatingLevel($this->charLevel, $var[4], abs($var[0])));
+                if (isset($statId) && $this->interactive)
+                    $resolved = sprintf($fmtStringMin, $statId, abs($minPoints), sprintf(Util::$setRatingLevelString, $this->charLevel, $statId, abs($minPoints), Util::setRatingLevel($this->charLevel, $statId, abs($minPoints))));
+                else if (isset($statId))
+                    $resolved = sprintf($fmtStringMin, $statId, abs($minPoints), Util::setRatingLevel($this->charLevel, $statId, abs($minPoints)));
                 else
-                    $resolved = sprintf($var[2], $resolved);
+                    $resolved = sprintf($fmtStringMin, $resolved);
             }
 
-            if (isset($var[1]) && $var[0] != $var[1] && !isset($var[4]))
+            if (isset($maxPoints) && $minPoints != $maxPoints && !isset($statId))
             {
-                $_ = is_numeric($var[1]) ? abs($var[1]) : $var[1];
+                $_ = is_numeric($maxPoints) ? abs($maxPoints) : $maxPoints;
                 $resolved .= Lang::game('valueDelim');
-                $resolved .= isset($var[3]) ? sprintf($var[3], $_) : $_;
+                $resolved .= isset($fmtStringMax) ? sprintf($fmtStringMax, $_) : $_;
             }
 
             $str .= $resolved;
@@ -2120,7 +1957,7 @@ class SpellList extends BaseType
             $x .= '<table><tr><td>'.implode('<br />', $xTmp).'</td></tr></table>';
 
         $min = $this->scaling[$this->id] ? ($this->getField('baseLevel') ?: 1) : 1;
-        $max = $this->scaling[$this->id] ? MAX_LEVEL : 1;
+        $max = $this->scaling[$this->id] ? ($this->getField('maxLevel') ?: MAX_LEVEL) : 1;
         // scaling information - spellId:min:max:curr
         $x .= '<!--?'.$this->id.':'.$min.':'.$max.':'.min($this->charLevel, $max).'-->';
 
@@ -2257,7 +2094,6 @@ class SpellList extends BaseType
             if ($mask = $this->curTpl['reqRaceMask'])
                 $data[$this->id]['reqrace'] = $mask;
 
-
             if ($addInfoMask & ITEMINFO_MODEL)
             {
                 // may have multiple models set, in this case i've no idea what should be picked
@@ -2288,15 +2124,11 @@ class SpellList extends BaseType
         {
             if ($addMask & GLOBALINFO_RELATED)
             {
-                if ($mask = $this->curTpl['reqClassMask'])
-                    for ($i = 0; $i < 11; $i++)
-                        if ($mask & (1 << $i))
-                            $data[Type::CHR_CLASS][$i + 1] = $i + 1;
+                foreach (ChrClass::fromMask($this->curTpl['reqClassMask']) as $cId)
+                    $data[Type::CHR_CLASS][$cId] = $cId;
 
-                if ($mask = $this->curTpl['reqRaceMask'])
-                    for ($i = 0; $i < 11; $i++)
-                        if ($mask & (1 << $i))
-                            $data[Type::CHR_RACE][$i + 1] = $i + 1;
+                foreach (ChrRace::fromMask($this->curTpl['reqRaceMask']) as $rId)
+                    $data[Type::CHR_RACE][$rId] = $rId;
 
                 // play sound effect
                 for ($i = 1; $i < 4; $i++)
@@ -2306,10 +2138,8 @@ class SpellList extends BaseType
 
             if ($addMask & GLOBALINFO_SELF)
             {
-                $iconString = $this->curTpl['iconStringAlt'] ? 'iconStringAlt' : 'iconString';
-
                 $data[Type::SPELL][$id] = array(
-                    'icon' => $this->curTpl[$iconString],
+                    'icon' => $this->curTpl['iconStringAlt'] ?: $this->curTpl['iconString'],
                     'name' => $this->getField('name', true),
                 );
             }
@@ -2429,7 +2259,7 @@ class SpellList extends BaseType
                 'ti'   => $this->id,
                 's'    => empty($this->curTpl['skillLines']) ? 0 : $this->curTpl['skillLines'][0],
                 'c'    => $this->curTpl['typeCat'],
-                'icon' => $this->curTpl['iconStringAlt'] ? $this->curTpl['iconStringAlt'] : $this->curTpl['iconString'],
+                'icon' => $this->curTpl['iconStringAlt'] ?: $this->curTpl['iconString'],
             );
         }
 
@@ -2487,124 +2317,124 @@ class SpellListFilter extends Filter
     );
 
     protected $genericFilter = array(
-         1  => [FILTER_CR_CALLBACK,  'cbCost',                                                                                   ], // costAbs [op] [int]
-         2  => [FILTER_CR_NUMERIC,   'powerCostPercent', NUM_CAST_INT                                                            ], // prcntbasemanarequired
-         3  => [FILTER_CR_BOOLEAN,   'spellFocusObject'                                                                          ], // requiresnearbyobject
-         4  => [FILTER_CR_NUMERIC,   'trainingcost',     NUM_CAST_INT                                                            ], // trainingcost
-         5  => [FILTER_CR_BOOLEAN,   'reqSpellId'                                                                                ], // requiresprofspec
-         8  => [FILTER_CR_FLAG,      'cuFlags',          CUSTOM_HAS_SCREENSHOT                                                   ], // hasscreenshots
-         9  => [FILTER_CR_CALLBACK,  'cbSource',                                                                                 ], // source [enum]
-        10  => [FILTER_CR_FLAG,      'cuFlags',          SPELL_CU_FIRST_RANK                                                     ], // firstrank
-        11  => [FILTER_CR_FLAG,      'cuFlags',          CUSTOM_HAS_COMMENT                                                      ], // hascomments
-        12  => [FILTER_CR_FLAG,      'cuFlags',          SPELL_CU_LAST_RANK                                                      ], // lastrank
-        13  => [FILTER_CR_NUMERIC,   'rankNo',           NUM_CAST_INT                                                            ], // rankno
-        14  => [FILTER_CR_NUMERIC,   'id',               NUM_CAST_INT,                            true                           ], // id
-        15  => [FILTER_CR_STRING,    'ic.name',                                                                                  ], // icon
-        17  => [FILTER_CR_FLAG,      'cuFlags',          CUSTOM_HAS_VIDEO                                                        ], // hasvideos
-        19  => [FILTER_CR_FLAG,      'attributes0',      SPELL_ATTR0_LEVEL_DAMAGE_CALCULATION                                    ], // scaling
-        20  => [FILTER_CR_CALLBACK,  'cbReagents',                                                                               ], // has Reagents [yn]
-     // 22  => [FILTER_CR_NYI_PH,    null,               null,                                    null                           ], // proficiencytype [proficiencytype]  pointless
-        25  => [FILTER_CR_BOOLEAN,   'skillLevelYellow'                                                                          ], // rewardsskillups
-        27  => [FILTER_CR_FLAG,      'attributes1',      SPELL_ATTR1_CHANNELED_1,                 true                           ], // channeled [yn]
-        28  => [FILTER_CR_NUMERIC,   'castTime',         NUM_CAST_FLOAT                                                          ], // casttime [num]
-        29  => [FILTER_CR_CALLBACK,  'cbAuraNames',                                                                              ], // appliesaura [effectauranames]
-     // 31  => [FILTER_CR_NYI_PH,    null,               null,                                    null                           ], // usablewhenshapeshifted [yn]  pointless
-        33  => [FILTER_CR_CALLBACK,  'cbInverseFlag',    'attributes0',                           SPELL_ATTR0_CANT_USED_IN_COMBAT], // combatcastable [yn]
-        34  => [FILTER_CR_CALLBACK,  'cbInverseFlag',    'attributes2',                           SPELL_ATTR2_CANT_CRIT          ], // chancetocrit [yn]
-        35  => [FILTER_CR_CALLBACK,  'cbInverseFlag',    'attributes3',                           SPELL_ATTR3_IGNORE_HIT_RESULT  ], // chancetomiss [yn]
-        36  => [FILTER_CR_FLAG,      'attributes3',      SPELL_ATTR3_DEATH_PERSISTENT                                            ], // persiststhroughdeath [yn]
-        38  => [FILTER_CR_FLAG,      'attributes0',      SPELL_ATTR0_ONLY_STEALTHED                                              ], // requiresstealth [yn]
-        39  => [FILTER_CR_CALLBACK,  'cbSpellstealable', 'attributes4',                           SPELL_ATTR4_NOT_STEALABLE      ], // spellstealable [yn]
-        40  => [FILTER_CR_ENUM,      'damageClass'                                                                               ], // damagetype [damagetype]
-        41  => [FILTER_CR_FLAG,      'stanceMask',       (1 << (22 - 1))                                                         ], // requiresmetamorphosis [yn]
-        42  => [FILTER_CR_FLAG,      'attributes5',      SPELL_ATTR5_USABLE_WHILE_STUNNED                                        ], // usablewhenstunned [yn]
-        44  => [FILTER_CR_CALLBACK,  'cbUsableInArena'                                                                           ], // usableinarenas [yn]
-        45  => [FILTER_CR_ENUM,      'powerType'                                                                                 ], // resourcetype [resourcetype]
-     // 46  => [FILTER_CR_NYI_PH,    null,               null,                                    null                           ], // disregardimmunity [yn]
-        47  => [FILTER_CR_FLAG,      'attributes1',      SPELL_ATTR1_UNAFFECTED_BY_SCHOOL_IMMUNE                                 ], // disregardschoolimmunity [yn]
-        48  => [FILTER_CR_CALLBACK,  'cbEquippedWeapon', 0x0004000C,                              false                          ], // reqrangedweapon [yn]
-        49  => [FILTER_CR_FLAG,      'attributes0',      SPELL_ATTR0_ON_NEXT_SWING                                               ], // onnextswingplayers [yn]
-        50  => [FILTER_CR_FLAG,      'attributes0',      SPELL_ATTR0_PASSIVE                                                     ], // passivespell [yn]
-        51  => [FILTER_CR_FLAG,      'attributes1',      SPELL_ATTR1_DONT_DISPLAY_IN_AURA_BAR                                    ], // hiddenaura [yn]
-        52  => [FILTER_CR_FLAG,      'attributes0',      SPELL_ATTR0_ON_NEXT_SWING_2                                             ], // onnextswingnpcs [yn]
-        53  => [FILTER_CR_FLAG,      'attributes0',      SPELL_ATTR0_DAYTIME_ONLY                                                ], // daytimeonly [yn]
-        54  => [FILTER_CR_FLAG,      'attributes0',      SPELL_ATTR0_NIGHT_ONLY                                                  ], // nighttimeonly [yn]
-        55  => [FILTER_CR_FLAG,      'attributes0',      SPELL_ATTR0_INDOORS_ONLY                                                ], // indoorsonly [yn]
-        56  => [FILTER_CR_FLAG,      'attributes0',      SPELL_ATTR0_OUTDOORS_ONLY                                               ], // outdoorsonly [yn]
-        57  => [FILTER_CR_FLAG,      'attributes0',      SPELL_ATTR0_CANT_CANCEL                                                 ], // uncancellableaura [yn]
-        58  => [FILTER_CR_FLAG,      'attributes0',      SPELL_ATTR0_LEVEL_DAMAGE_CALCULATION                                    ], // damagedependsonlevel [yn]
-        59  => [FILTER_CR_FLAG,      'attributes0',      SPELL_ATTR0_STOP_ATTACK_TARGET                                          ], // stopsautoattack [yn]
-        60  => [FILTER_CR_FLAG,      'attributes0',      SPELL_ATTR0_IMPOSSIBLE_DODGE_PARRY_BLOCK                                ], // cannotavoid [yn]
-        61  => [FILTER_CR_FLAG,      'attributes0',      SPELL_ATTR0_CASTABLE_WHILE_DEAD                                         ], // usabledead [yn]
-        62  => [FILTER_CR_FLAG,      'attributes0',      SPELL_ATTR0_CASTABLE_WHILE_MOUNTED                                      ], // usablemounted [yn]
-        63  => [FILTER_CR_FLAG,      'attributes0',      SPELL_ATTR0_DISABLED_WHILE_ACTIVE                                       ], // delayedrecoverystarttime [yn]
-        64  => [FILTER_CR_FLAG,      'attributes0',      SPELL_ATTR0_CASTABLE_WHILE_SITTING                                      ], // usablesitting [yn]
-        65  => [FILTER_CR_FLAG,      'attributes1',      SPELL_ATTR1_DRAIN_ALL_POWER                                             ], // usesallpower [yn]
-        66  => [FILTER_CR_FLAG,      'attributes1',      SPELL_ATTR1_CHANNELED_2,                  true                          ], // channeled [yn]
-        67  => [FILTER_CR_FLAG,      'attributes1',      SPELL_ATTR1_CANT_BE_REFLECTED                                           ], // cannotreflect [yn]
-        68  => [FILTER_CR_FLAG,      'attributes1',      SPELL_ATTR1_NOT_BREAK_STEALTH                                           ], // usablestealthed [yn]
-        69  => [FILTER_CR_FLAG,      'attributes0',      SPELL_ATTR0_NEGATIVE_1                                                  ], // harmful [yn]
-        70  => [FILTER_CR_FLAG,      'attributes1',      SPELL_ATTR1_CANT_TARGET_IN_COMBAT                                       ], // targetnotincombat [yn]
-        71  => [FILTER_CR_FLAG,      'attributes1',      SPELL_ATTR1_NO_THREAT                                                   ], // nothreat [yn]
-        72  => [FILTER_CR_FLAG,      'attributes1',      SPELL_ATTR1_IS_PICKPOCKET                                               ], // pickpocket [yn]
-        73  => [FILTER_CR_FLAG,      'attributes1',      SPELL_ATTR1_DISPEL_AURAS_ON_IMMUNITY                                    ], // dispelauraonimmunity [yn]
-        74  => [FILTER_CR_CALLBACK,  'cbEquippedWeapon', 0x00100000,                              false                          ], // reqfishingpole [yn]
-        75  => [FILTER_CR_FLAG,      'attributes2',      SPELL_ATTR2_CANT_TARGET_TAPPED                                          ], // requntappedtarget [yn]
-     // 76  => [FILTER_CR_NYI_PH,    null,               null,                                    null                           ], // targetownitem [yn]  // the flag for this has to be somewhere....
-        77  => [FILTER_CR_FLAG,      'attributes2',      SPELL_ATTR2_NOT_NEED_SHAPESHIFT                                         ], // doesntreqshapeshift [yn]
-        78  => [FILTER_CR_FLAG,      'attributes2',      SPELL_ATTR2_FOOD_BUFF                                                   ], // foodbuff [yn]
-        79  => [FILTER_CR_FLAG,      'attributes3',      SPELL_ATTR3_ONLY_TARGET_PLAYERS                                         ], // targetonlyplayer [yn]
-        80  => [FILTER_CR_CALLBACK,  'cbEquippedWeapon', 1 << INVTYPE_WEAPONMAINHAND,             true                           ], // reqmainhand [yn]
-        81  => [FILTER_CR_FLAG,      'attributes3',      SPELL_ATTR3_NO_INITIAL_AGGRO                                            ], // doesntengagetarget [yn]
-        82  => [FILTER_CR_CALLBACK,  'cbEquippedWeapon', 0x00080000,                              false                          ], // reqwand [yn]
-        83  => [FILTER_CR_CALLBACK,  'cbEquippedWeapon', 1 << INVTYPE_WEAPONOFFHAND,              true                           ], // reqoffhand [yn]
-        84  => [FILTER_CR_FLAG,      'attributes0',      SPELL_ATTR0_HIDE_IN_COMBAT_LOG                                          ], // nolog [yn]
-        85  => [FILTER_CR_FLAG,      'attributes4',      SPELL_ATTR4_FADES_WHILE_LOGGED_OUT                                      ], // auratickswhileloggedout [yn]
-        87  => [FILTER_CR_FLAG,      'attributes5',      SPELL_ATTR5_START_PERIODIC_AT_APPLY                                     ], // startstickingatapplication [yn]
-        88  => [FILTER_CR_FLAG,      'attributes5',      SPELL_ATTR5_USABLE_WHILE_CONFUSED                                       ], // usableconfused [yn]
-        89  => [FILTER_CR_FLAG,      'attributes5',      SPELL_ATTR5_USABLE_WHILE_FEARED                                         ], // usablefeared [yn]
-        90  => [FILTER_CR_FLAG,      'attributes6',      SPELL_ATTR6_ONLY_IN_ARENA                                               ], // onlyarena [yn]
-        91  => [FILTER_CR_FLAG,      'attributes6',      SPELL_ATTR6_NOT_IN_RAID_INSTANCE                                        ], // notinraid [yn]
-        92  => [FILTER_CR_FLAG,      'attributes7',      SPELL_ATTR7_REACTIVATE_AT_RESURRECT                                     ], // paladinaura [yn]
-        93  => [FILTER_CR_FLAG,      'attributes7',      SPELL_ATTR7_SUMMON_PLAYER_TOTEM                                         ], // totemspell [yn]
-        95  => [FILTER_CR_CALLBACK,  'cbBandageSpell'                                                                            ], // bandagespell [yn] ...don't ask
-        96  => [FILTER_CR_STAFFFLAG, 'attributes0'                                                                               ], // flags1 [flags]
-        97  => [FILTER_CR_STAFFFLAG, 'attributes1'                                                                               ], // flags2 [flags]
-        98  => [FILTER_CR_STAFFFLAG, 'attributes2'                                                                               ], // flags3 [flags]
-        99  => [FILTER_CR_STAFFFLAG, 'attributes3'                                                                               ], // flags4 [flags]
-        100 => [FILTER_CR_STAFFFLAG, 'attributes4'                                                                               ], // flags5 [flags]
-        101 => [FILTER_CR_STAFFFLAG, 'attributes5'                                                                               ], // flags6 [flags]
-        102 => [FILTER_CR_STAFFFLAG, 'attributes6'                                                                               ], // flags7 [flags]
-        103 => [FILTER_CR_STAFFFLAG, 'attributes7'                                                                               ], // flags8 [flags]
-        104 => [FILTER_CR_STAFFFLAG, 'targets'                                                                                   ], // flags9 [flags]
-        105 => [FILTER_CR_STAFFFLAG, 'stanceMaskNot'                                                                             ], // flags10 [flags]
-        106 => [FILTER_CR_STAFFFLAG, 'spellFamilyFlags1'                                                                         ], // flags11 [flags]
-        107 => [FILTER_CR_STAFFFLAG, 'spellFamilyFlags2'                                                                         ], // flags12 [flags]
-        108 => [FILTER_CR_STAFFFLAG, 'spellFamilyFlags3'                                                                         ], // flags13 [flags]
-        109 => [FILTER_CR_CALLBACK,  'cbEffectNames',                                                                            ], // effecttype [effecttype]
-     // 110 => [FILTER_CR_NYI_PH,    null,               null,                                    null                           ], // scalingap [yn]  // unreasonably complex for now
-     // 111 => [FILTER_CR_NYI_PH,    null,               null,                                    null                           ], // scalingsp [yn]  // unreasonably complex for now
-        114 => [FILTER_CR_CALLBACK,  'cbReqFaction'                                                                              ], // requiresfaction [side]
-        116 => [FILTER_CR_BOOLEAN,   'startRecoveryTime'                                                                         ]  // onGlobalCooldown [yn]
+         1  => [parent::CR_CALLBACK,  'cbCost',                                                                                   ], // costAbs [op] [int]
+         2  => [parent::CR_NUMERIC,   'powerCostPercent', NUM_CAST_INT                                                            ], // prcntbasemanarequired
+         3  => [parent::CR_BOOLEAN,   'spellFocusObject'                                                                          ], // requiresnearbyobject
+         4  => [parent::CR_NUMERIC,   'trainingcost',     NUM_CAST_INT                                                            ], // trainingcost
+         5  => [parent::CR_BOOLEAN,   'reqSpellId'                                                                                ], // requiresprofspec
+         8  => [parent::CR_FLAG,      'cuFlags',          CUSTOM_HAS_SCREENSHOT                                                   ], // hasscreenshots
+         9  => [parent::CR_CALLBACK,  'cbSource',                                                                                 ], // source [enum]
+        10  => [parent::CR_FLAG,      'cuFlags',          SPELL_CU_FIRST_RANK                                                     ], // firstrank
+        11  => [parent::CR_FLAG,      'cuFlags',          CUSTOM_HAS_COMMENT                                                      ], // hascomments
+        12  => [parent::CR_FLAG,      'cuFlags',          SPELL_CU_LAST_RANK                                                      ], // lastrank
+        13  => [parent::CR_NUMERIC,   'rankNo',           NUM_CAST_INT                                                            ], // rankno
+        14  => [parent::CR_NUMERIC,   'id',               NUM_CAST_INT,                            true                           ], // id
+        15  => [parent::CR_STRING,    'ic.name',                                                                                  ], // icon
+        17  => [parent::CR_FLAG,      'cuFlags',          CUSTOM_HAS_VIDEO                                                        ], // hasvideos
+        19  => [parent::CR_FLAG,      'attributes0',      SPELL_ATTR0_LEVEL_DAMAGE_CALCULATION                                    ], // scaling
+        20  => [parent::CR_CALLBACK,  'cbReagents',                                                                               ], // has Reagents [yn]
+     // 22  => [parent::CR_NYI_PH,    null,               null,                                    null                           ], // proficiencytype [proficiencytype]  pointless
+        25  => [parent::CR_BOOLEAN,   'skillLevelYellow'                                                                          ], // rewardsskillups
+        27  => [parent::CR_FLAG,      'attributes1',      SPELL_ATTR1_CHANNELED_1,                 true                           ], // channeled [yn]
+        28  => [parent::CR_NUMERIC,   'castTime',         NUM_CAST_FLOAT                                                          ], // casttime [num]
+        29  => [parent::CR_CALLBACK,  'cbAuraNames',                                                                              ], // appliesaura [effectauranames]
+     // 31  => [parent::CR_NYI_PH,    null,               null,                                    null                           ], // usablewhenshapeshifted [yn]  pointless
+        33  => [parent::CR_CALLBACK,  'cbInverseFlag',    'attributes0',                           SPELL_ATTR0_CANT_USED_IN_COMBAT], // combatcastable [yn]
+        34  => [parent::CR_CALLBACK,  'cbInverseFlag',    'attributes2',                           SPELL_ATTR2_CANT_CRIT          ], // chancetocrit [yn]
+        35  => [parent::CR_CALLBACK,  'cbInverseFlag',    'attributes3',                           SPELL_ATTR3_IGNORE_HIT_RESULT  ], // chancetomiss [yn]
+        36  => [parent::CR_FLAG,      'attributes3',      SPELL_ATTR3_DEATH_PERSISTENT                                            ], // persiststhroughdeath [yn]
+        38  => [parent::CR_FLAG,      'attributes0',      SPELL_ATTR0_ONLY_STEALTHED                                              ], // requiresstealth [yn]
+        39  => [parent::CR_CALLBACK,  'cbSpellstealable', 'attributes4',                           SPELL_ATTR4_NOT_STEALABLE      ], // spellstealable [yn]
+        40  => [parent::CR_ENUM,      'damageClass'                                                                               ], // damagetype [damagetype]
+        41  => [parent::CR_FLAG,      'stanceMask',       (1 << (22 - 1))                                                         ], // requiresmetamorphosis [yn]
+        42  => [parent::CR_FLAG,      'attributes5',      SPELL_ATTR5_USABLE_WHILE_STUNNED                                        ], // usablewhenstunned [yn]
+        44  => [parent::CR_CALLBACK,  'cbUsableInArena'                                                                           ], // usableinarenas [yn]
+        45  => [parent::CR_ENUM,      'powerType'                                                                                 ], // resourcetype [resourcetype]
+     // 46  => [parent::CR_NYI_PH,    null,               null,                                    null                           ], // disregardimmunity [yn]
+        47  => [parent::CR_FLAG,      'attributes1',      SPELL_ATTR1_UNAFFECTED_BY_SCHOOL_IMMUNE                                 ], // disregardschoolimmunity [yn]
+        48  => [parent::CR_CALLBACK,  'cbEquippedWeapon', 0x0004000C,                              false                          ], // reqrangedweapon [yn]
+        49  => [parent::CR_FLAG,      'attributes0',      SPELL_ATTR0_ON_NEXT_SWING                                               ], // onnextswingplayers [yn]
+        50  => [parent::CR_FLAG,      'attributes0',      SPELL_ATTR0_PASSIVE                                                     ], // passivespell [yn]
+        51  => [parent::CR_FLAG,      'attributes1',      SPELL_ATTR1_DONT_DISPLAY_IN_AURA_BAR                                    ], // hiddenaura [yn]
+        52  => [parent::CR_FLAG,      'attributes0',      SPELL_ATTR0_ON_NEXT_SWING_2                                             ], // onnextswingnpcs [yn]
+        53  => [parent::CR_FLAG,      'attributes0',      SPELL_ATTR0_DAYTIME_ONLY                                                ], // daytimeonly [yn]
+        54  => [parent::CR_FLAG,      'attributes0',      SPELL_ATTR0_NIGHT_ONLY                                                  ], // nighttimeonly [yn]
+        55  => [parent::CR_FLAG,      'attributes0',      SPELL_ATTR0_INDOORS_ONLY                                                ], // indoorsonly [yn]
+        56  => [parent::CR_FLAG,      'attributes0',      SPELL_ATTR0_OUTDOORS_ONLY                                               ], // outdoorsonly [yn]
+        57  => [parent::CR_FLAG,      'attributes0',      SPELL_ATTR0_CANT_CANCEL                                                 ], // uncancellableaura [yn]
+        58  => [parent::CR_FLAG,      'attributes0',      SPELL_ATTR0_LEVEL_DAMAGE_CALCULATION                                    ], // damagedependsonlevel [yn]
+        59  => [parent::CR_FLAG,      'attributes0',      SPELL_ATTR0_STOP_ATTACK_TARGET                                          ], // stopsautoattack [yn]
+        60  => [parent::CR_FLAG,      'attributes0',      SPELL_ATTR0_IMPOSSIBLE_DODGE_PARRY_BLOCK                                ], // cannotavoid [yn]
+        61  => [parent::CR_FLAG,      'attributes0',      SPELL_ATTR0_CASTABLE_WHILE_DEAD                                         ], // usabledead [yn]
+        62  => [parent::CR_FLAG,      'attributes0',      SPELL_ATTR0_CASTABLE_WHILE_MOUNTED                                      ], // usablemounted [yn]
+        63  => [parent::CR_FLAG,      'attributes0',      SPELL_ATTR0_DISABLED_WHILE_ACTIVE                                       ], // delayedrecoverystarttime [yn]
+        64  => [parent::CR_FLAG,      'attributes0',      SPELL_ATTR0_CASTABLE_WHILE_SITTING                                      ], // usablesitting [yn]
+        65  => [parent::CR_FLAG,      'attributes1',      SPELL_ATTR1_DRAIN_ALL_POWER                                             ], // usesallpower [yn]
+        66  => [parent::CR_FLAG,      'attributes1',      SPELL_ATTR1_CHANNELED_2,                  true                          ], // channeled [yn]
+        67  => [parent::CR_FLAG,      'attributes1',      SPELL_ATTR1_CANT_BE_REFLECTED                                           ], // cannotreflect [yn]
+        68  => [parent::CR_FLAG,      'attributes1',      SPELL_ATTR1_NOT_BREAK_STEALTH                                           ], // usablestealthed [yn]
+        69  => [parent::CR_FLAG,      'attributes0',      SPELL_ATTR0_NEGATIVE_1                                                  ], // harmful [yn]
+        70  => [parent::CR_FLAG,      'attributes1',      SPELL_ATTR1_CANT_TARGET_IN_COMBAT                                       ], // targetnotincombat [yn]
+        71  => [parent::CR_FLAG,      'attributes1',      SPELL_ATTR1_NO_THREAT                                                   ], // nothreat [yn]
+        72  => [parent::CR_FLAG,      'attributes1',      SPELL_ATTR1_IS_PICKPOCKET                                               ], // pickpocket [yn]
+        73  => [parent::CR_FLAG,      'attributes1',      SPELL_ATTR1_DISPEL_AURAS_ON_IMMUNITY                                    ], // dispelauraonimmunity [yn]
+        74  => [parent::CR_CALLBACK,  'cbEquippedWeapon', 0x00100000,                              false                          ], // reqfishingpole [yn]
+        75  => [parent::CR_FLAG,      'attributes2',      SPELL_ATTR2_CANT_TARGET_TAPPED                                          ], // requntappedtarget [yn]
+     // 76  => [parent::CR_NYI_PH,    null,               null,                                    null                           ], // targetownitem [yn]  // the flag for this has to be somewhere....
+        77  => [parent::CR_FLAG,      'attributes2',      SPELL_ATTR2_NOT_NEED_SHAPESHIFT                                         ], // doesntreqshapeshift [yn]
+        78  => [parent::CR_FLAG,      'attributes2',      SPELL_ATTR2_FOOD_BUFF                                                   ], // foodbuff [yn]
+        79  => [parent::CR_FLAG,      'attributes3',      SPELL_ATTR3_ONLY_TARGET_PLAYERS                                         ], // targetonlyplayer [yn]
+        80  => [parent::CR_CALLBACK,  'cbEquippedWeapon', 1 << INVTYPE_WEAPONMAINHAND,             true                           ], // reqmainhand [yn]
+        81  => [parent::CR_FLAG,      'attributes3',      SPELL_ATTR3_NO_INITIAL_AGGRO                                            ], // doesntengagetarget [yn]
+        82  => [parent::CR_CALLBACK,  'cbEquippedWeapon', 0x00080000,                              false                          ], // reqwand [yn]
+        83  => [parent::CR_CALLBACK,  'cbEquippedWeapon', 1 << INVTYPE_WEAPONOFFHAND,              true                           ], // reqoffhand [yn]
+        84  => [parent::CR_FLAG,      'attributes0',      SPELL_ATTR0_HIDE_IN_COMBAT_LOG                                          ], // nolog [yn]
+        85  => [parent::CR_FLAG,      'attributes4',      SPELL_ATTR4_FADES_WHILE_LOGGED_OUT                                      ], // auratickswhileloggedout [yn]
+        87  => [parent::CR_FLAG,      'attributes5',      SPELL_ATTR5_START_PERIODIC_AT_APPLY                                     ], // startstickingatapplication [yn]
+        88  => [parent::CR_FLAG,      'attributes5',      SPELL_ATTR5_USABLE_WHILE_CONFUSED                                       ], // usableconfused [yn]
+        89  => [parent::CR_FLAG,      'attributes5',      SPELL_ATTR5_USABLE_WHILE_FEARED                                         ], // usablefeared [yn]
+        90  => [parent::CR_FLAG,      'attributes6',      SPELL_ATTR6_ONLY_IN_ARENA                                               ], // onlyarena [yn]
+        91  => [parent::CR_FLAG,      'attributes6',      SPELL_ATTR6_NOT_IN_RAID_INSTANCE                                        ], // notinraid [yn]
+        92  => [parent::CR_FLAG,      'attributes7',      SPELL_ATTR7_REACTIVATE_AT_RESURRECT                                     ], // paladinaura [yn]
+        93  => [parent::CR_FLAG,      'attributes7',      SPELL_ATTR7_SUMMON_PLAYER_TOTEM                                         ], // totemspell [yn]
+        95  => [parent::CR_CALLBACK,  'cbBandageSpell'                                                                            ], // bandagespell [yn] ...don't ask
+        96  => [parent::CR_STAFFFLAG, 'attributes0'                                                                               ], // flags1 [flags]
+        97  => [parent::CR_STAFFFLAG, 'attributes1'                                                                               ], // flags2 [flags]
+        98  => [parent::CR_STAFFFLAG, 'attributes2'                                                                               ], // flags3 [flags]
+        99  => [parent::CR_STAFFFLAG, 'attributes3'                                                                               ], // flags4 [flags]
+        100 => [parent::CR_STAFFFLAG, 'attributes4'                                                                               ], // flags5 [flags]
+        101 => [parent::CR_STAFFFLAG, 'attributes5'                                                                               ], // flags6 [flags]
+        102 => [parent::CR_STAFFFLAG, 'attributes6'                                                                               ], // flags7 [flags]
+        103 => [parent::CR_STAFFFLAG, 'attributes7'                                                                               ], // flags8 [flags]
+        104 => [parent::CR_STAFFFLAG, 'targets'                                                                                   ], // flags9 [flags]
+        105 => [parent::CR_STAFFFLAG, 'stanceMaskNot'                                                                             ], // flags10 [flags]
+        106 => [parent::CR_STAFFFLAG, 'spellFamilyFlags1'                                                                         ], // flags11 [flags]
+        107 => [parent::CR_STAFFFLAG, 'spellFamilyFlags2'                                                                         ], // flags12 [flags]
+        108 => [parent::CR_STAFFFLAG, 'spellFamilyFlags3'                                                                         ], // flags13 [flags]
+        109 => [parent::CR_CALLBACK,  'cbEffectNames',                                                                            ], // effecttype [effecttype]
+     // 110 => [parent::CR_NYI_PH,    null,               null,                                    null                           ], // scalingap [yn]  // unreasonably complex for now
+     // 111 => [parent::CR_NYI_PH,    null,               null,                                    null                           ], // scalingsp [yn]  // unreasonably complex for now
+        114 => [parent::CR_CALLBACK,  'cbReqFaction'                                                                              ], // requiresfaction [side]
+        116 => [parent::CR_BOOLEAN,   'startRecoveryTime'                                                                         ]  // onGlobalCooldown [yn]
     );
 
     protected $inputFields = array(
-        'cr'    => [FILTER_V_RANGE,    [1, 116],                                        true ], // criteria ids
-        'crs'   => [FILTER_V_LIST,     [FILTER_ENUM_NONE, FILTER_ENUM_ANY, [0, 99999]], true ], // criteria operators
-        'crv'   => [FILTER_V_REGEX,    parent::PATTERN_CRV,                             true ], // criteria values - only printable chars, no delimiters
-        'na'    => [FILTER_V_REGEX,    parent::PATTERN_NAME,                            false], // name / text - only printable chars, no delimiter
-        'ex'    => [FILTER_V_EQUAL,    'on',                                            false], // extended name search
-        'ma'    => [FILTER_V_EQUAL,    1,                                               false], // match any / all filter
-        'minle' => [FILTER_V_RANGE,    [1, 99],                                         false], // spell level min
-        'maxle' => [FILTER_V_RANGE,    [1, 99],                                         false], // spell level max
-        'minrs' => [FILTER_V_RANGE,    [1, 999],                                        false], // required skill level min
-        'maxrs' => [FILTER_V_RANGE,    [1, 999],                                        false], // required skill level max
-        'ra'    => [FILTER_V_LIST,     [[1, 8], 10, 11],                                false], // races
-        'cl'    => [FILTER_V_CALLBACK, 'cbClasses',                                     true ], // classes
-        'gl'    => [FILTER_V_CALLBACK, 'cbGlyphs',                                      true ], // glyph type
-        'sc'    => [FILTER_V_RANGE,    [0, 6],                                          true ], // magic schools
-        'dt'    => [FILTER_V_LIST,     [[1, 6], 9],                                     false], // dispel types
-        'me'    => [FILTER_V_RANGE,    [1, 31],                                         false]  // mechanics
+        'cr'    => [parent::V_RANGE,    [1, 116],                                        true ], // criteria ids
+        'crs'   => [parent::V_LIST,     [parent::ENUM_NONE, parent::ENUM_ANY, [0, 99999]], true ], // criteria operators
+        'crv'   => [parent::V_REGEX,    parent::PATTERN_CRV,                             true ], // criteria values - only printable chars, no delimiters
+        'na'    => [parent::V_REGEX,    parent::PATTERN_NAME,                            false], // name / text - only printable chars, no delimiter
+        'ex'    => [parent::V_EQUAL,    'on',                                            false], // extended name search
+        'ma'    => [parent::V_EQUAL,    1,                                               false], // match any / all filter
+        'minle' => [parent::V_RANGE,    [1, 99],                                         false], // spell level min
+        'maxle' => [parent::V_RANGE,    [1, 99],                                         false], // spell level max
+        'minrs' => [parent::V_RANGE,    [1, 999],                                        false], // required skill level min
+        'maxrs' => [parent::V_RANGE,    [1, 999],                                        false], // required skill level max
+        'ra'    => [parent::V_LIST,     [[1, 8], 10, 11],                                false], // races
+        'cl'    => [parent::V_CALLBACK, 'cbClasses',                                     true ], // classes
+        'gl'    => [parent::V_CALLBACK, 'cbGlyphs',                                      true ], // glyph type
+        'sc'    => [parent::V_RANGE,    [0, 6],                                          true ], // magic schools
+        'dt'    => [parent::V_LIST,     [[1, 6], 9],                                     false], // dispel types
+        'me'    => [parent::V_RANGE,    [1, 31],                                         false]  // mechanics
     );
 
     protected function createSQLForValues()
@@ -2617,9 +2447,9 @@ class SpellListFilter extends Filter
         {
             $_ = [];
             if (isset($_v['ex']) && $_v['ex'] == 'on')
-                $_ = $this->modularizeString(['name_loc'.User::$localeId, 'buff_loc'.User::$localeId, 'description_loc'.User::$localeId]);
+                $_ = $this->modularizeString(['name_loc'.Lang::getLocale()->value, 'buff_loc'.Lang::getLocale()->value, 'description_loc'.Lang::getLocale()->value]);
             else
-                $_ = $this->modularizeString(['name_loc'.User::$localeId]);
+                $_ = $this->modularizeString(['name_loc'.Lang::getLocale()->value]);
 
             if ($_)
                 $parts[] = $_;
@@ -2643,7 +2473,7 @@ class SpellListFilter extends Filter
 
         // race
         if (isset($_v['ra']))
-            $parts[] = ['AND', [['reqRaceMask', RACE_MASK_ALL, '&'], RACE_MASK_ALL, '!'], ['reqRaceMask', $this->list2Mask([$_v['ra']]), '&']];
+            $parts[] = ['AND', [['reqRaceMask', ChrRace::MASK_ALL, '&'], ChrRace::MASK_ALL, '!'], ['reqRaceMask', $this->list2Mask([$_v['ra']]), '&']];
 
         // class [list]
         if (isset($_v['cl']))
@@ -2678,10 +2508,10 @@ class SpellListFilter extends Filter
         if (!$this->parentCats || !in_array($this->parentCats[0], [-13, -2, 7]))
             return false;
 
-        if (!Util::checkNumeric($val, NUM_REQ_INT))
+        if (!Util::checkNumeric($val, NUM_CAST_INT))
             return false;
 
-        $type  = FILTER_V_LIST;
+        $type  = parent::V_LIST;
         $valid = [[1, 9], 11];
 
         return $this->checkInput($type, $valid, $val);
@@ -2692,10 +2522,10 @@ class SpellListFilter extends Filter
         if (!$this->parentCats || $this->parentCats[0] != -13)
             return false;
 
-        if (!Util::checkNumeric($val, NUM_REQ_INT))
+        if (!Util::checkNumeric($val, NUM_CAST_INT))
             return false;
 
-        $type  = FILTER_V_LIST;
+        $type  = parent::V_LIST;
         $valid = [1, 2];
 
         return $this->checkInput($type, $valid, $val);
@@ -2741,7 +2571,7 @@ class SpellListFilter extends Filter
 
     protected function cbAuraNames($cr)
     {
-        if (!$this->checkInput(FILTER_V_RANGE, [1, self::MAX_SPELL_AURA], $cr[1]))
+        if (!$this->checkInput(parent::V_RANGE, [1, self::MAX_SPELL_AURA], $cr[1]))
             return false;
 
         return ['OR', ['effect1AuraId', $cr[1]], ['effect2AuraId', $cr[1]], ['effect3AuraId', $cr[1]]];
@@ -2749,7 +2579,7 @@ class SpellListFilter extends Filter
 
     protected function cbEffectNames($cr)
     {
-        if (!$this->checkInput(FILTER_V_RANGE, [1, self::MAX_SPELL_EFFECT], $cr[1]))
+        if (!$this->checkInput(parent::V_RANGE, [1, self::MAX_SPELL_EFFECT], $cr[1]))
             return false;
 
         return ['OR', ['effect1Id', $cr[1]], ['effect2Id', $cr[1]], ['effect3Id', $cr[1]]];
@@ -2772,9 +2602,9 @@ class SpellListFilter extends Filter
             return false;
 
         if ($cr[1])
-            return ['AND', [[$field, $flag, '&'], 0], ['dispelType', 1]];
+            return ['AND', [[$field, $flag, '&'], 0], ['dispelType', SPELL_DAMAGE_CLASS_MAGIC]];
         else
-            return ['OR', [$field, $flag, '&'], ['dispelType', 1, '!']];
+            return ['OR', [$field, $flag, '&'], ['dispelType', SPELL_DAMAGE_CLASS_MAGIC, '!']];
     }
 
     protected function cbReqFaction($cr)
@@ -2784,11 +2614,11 @@ class SpellListFilter extends Filter
             case 1:                                         // yes
                 return ['reqRaceMask', 0, '!'];
             case 2:                                         // alliance
-                return ['AND', [['reqRaceMask', RACE_MASK_HORDE, '&'], 0], ['reqRaceMask', RACE_MASK_ALLIANCE, '&']];
+                return ['AND', [['reqRaceMask', ChrRace::MASK_HORDE, '&'], 0], ['reqRaceMask', ChrRace::MASK_ALLIANCE, '&']];
             case 3:                                         // horde
-                return ['AND', [['reqRaceMask', RACE_MASK_ALLIANCE, '&'], 0], ['reqRaceMask', RACE_MASK_HORDE, '&']];
+                return ['AND', [['reqRaceMask', ChrRace::MASK_ALLIANCE, '&'], 0], ['reqRaceMask', ChrRace::MASK_HORDE, '&']];
             case 4:                                         // both
-                return ['AND', ['reqRaceMask', RACE_MASK_ALLIANCE, '&'], ['reqRaceMask', RACE_MASK_HORDE, '&']];
+                return ['AND', ['reqRaceMask', ChrRace::MASK_ALLIANCE, '&'], ['reqRaceMask', ChrRace::MASK_HORDE, '&']];
             case 5:                                         // no
                 return ['reqRaceMask', 0];
             default:

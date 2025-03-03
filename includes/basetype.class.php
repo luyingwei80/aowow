@@ -55,11 +55,14 @@ abstract class BaseType
     *   results in
     *       WHERE ((`id` = 45) OR (`name` NOT LIKE "test%") OR ((`flags` & 255) AND (`flags2` & 15)) OR ((`mask` & 3) = 0)) OR (`joinedTbl`.`field` IS NULL) LIMIT 5
     */
-    public function __construct($conditions = [], $miscData = null)
+    public function __construct(array $conditions = [], array $miscData = [])
     {
         $where     = [];
         $linking   = ' AND ';
-        $limit     = CFG_SQL_LIMIT_DEFAULT;
+        $limit     = Cfg::get('SQL_LIMIT_DEFAULT');
+
+        $calcTotal  = false;
+        $totalQuery = '';
 
         if (!$this->queryBase || $conditions === null)
             return;
@@ -70,10 +73,13 @@ abstract class BaseType
         else
             $prefixes['base'] = '';
 
-        if ($miscData && !empty($miscData['extraOpts']))
+        if (!empty($miscData['extraOpts']))
             $this->extendQueryOpts($miscData['extraOpts']);
 
-        $resolveCondition = function ($c, $supLink) use (&$resolveCondition, &$prefixes, $miscData)
+        if (!empty($miscData['calcTotal']))
+            $calcTotal = true;
+
+        $resolveCondition = function ($c, $supLink) use (&$resolveCondition, &$prefixes)
         {
             $subLink = '';
 
@@ -166,7 +172,7 @@ abstract class BaseType
                     $op  = (isset($c[2]) && $c[2] == '!') ? 'NOT IN' : 'IN';
                     $val = '('.implode(', ', $c[1]).')';
                 }
-                else if (Util::checkNumeric($c[1]))
+                else if (Util::checkNumeric($c[1]))         // Note: should this be a NUM_REQ_* check?
                 {
                     $op  = (isset($c[2]) && $c[2] == '!') ? '<>' : '=';
                     $val = $c[1];
@@ -249,6 +255,10 @@ abstract class BaseType
         if ($h = array_filter(array_column($this->queryOpts, 'h')))
             $this->queryBase .= ' HAVING '.implode(' AND ', $h);
 
+        // without applied LIMIT and ORDER
+        if ($calcTotal)
+            $totalQuery = $this->queryBase;
+
         // append ordering
         if ($o = array_filter(array_column($this->queryOpts, 'o')))
             $this->queryBase .= ' ORDER BY '.implode(', ', $o);
@@ -258,15 +268,24 @@ abstract class BaseType
             $this->queryBase .= ' LIMIT '.$limit;
 
         // execute query (finally)
-        $mtch = 0;
         $rows = [];
         // this is purely because of multiple realms per server
         foreach ($this->dbNames as $dbIdx => $n)
         {
             $query = str_replace('DB_IDX', $dbIdx, $this->queryBase);
-            if ($rows  = DB::{$n}($dbIdx)->SelectPage($mtch, $query))
+            if ($rows  = DB::{$n}($dbIdx)->select($query))
             {
-                $this->matches += $mtch;
+                if ($calcTotal)
+                {
+                    // hackfix the inner items query to not contain duplicate column names
+                    // yes i know the real solution would be to not have items and item_stats share column names
+                    // soon™....
+                    if (get_class($this) == 'ItemList')
+                        $totalQuery = str_replace([', `is`.*', ', i.id AS id'], '', $totalQuery);
+
+                    $this->matches += DB::{$n}($dbIdx)->selectCell('SELECT COUNT(*) FROM ('.$totalQuery.') x');
+                }
+
                 foreach ($rows as $id => $row)
                 {
                     if (isset($this->templates[$id]))
@@ -365,16 +384,15 @@ abstract class BaseType
         return $data;
     }
 
-    public function getRandomId()
+    public function getRandomId() : int
     {
         // ORDER BY RAND() is not optimal, so if anyone has an alternative idea..
-        $where   = User::isInGroup(U_GROUP_EMPLOYEE) ? 'WHERE (cuFlags & '.CUSTOM_EXCLUDE_FOR_LISTVIEW.') = 0' : null;
-        $pattern = '/SELECT .* (-?`?[\w_]*\`?.?`?(id|entry)`?) AS ARRAY_KEY,?.* FROM (\?[\w_-]+) (`?\w*`?)/i';
-        $replace = 'SELECT $1 FROM $3 $4 '.$where.' ORDER BY RAND() ASC LIMIT 1';
+        $where = User::isInGroup(U_GROUP_EMPLOYEE) ? ' WHERE (`cuFlags` & '.CUSTOM_EXCLUDE_FOR_LISTVIEW.') = 0' : '';
 
-        $query   = preg_replace($pattern, $replace, $this->queryBase);
+        if (preg_match('/SELECT .*? FROM (\?\_[\w_-]+) /i', $this->queryBase, $m))
+            return DB::Aowow()->selectCell(sprintf('SELECT `id` FROM %s%s ORDER BY RAND() ASC LIMIT 1', $m[1], $where));
 
-        return DB::Aowow()->selectCell($query);
+        return 0;
     }
 
     public function getFoundIDs()
@@ -566,10 +584,10 @@ trait spawnHelper
         $this->spawnResult[SPAWNINFO_SHORT] = new StdClass;
 
         // first get zone/floor with the most spawns
-        if ($res = DB::Aowow()->selectRow('SELECT areaId, floor FROM ?_spawns WHERE type = ?d AND typeId = ?d AND posX > 0 AND posY > 0 GROUP BY areaId, floor ORDER BY count(1) DESC LIMIT 1', self::$type, $this->id))
+        if ($res = DB::Aowow()->selectRow('SELECT `areaId`, `floor` FROM ?_spawns WHERE `type` = ?d AND `typeId` = ?d AND `posX` > 0 AND `posY` > 0 GROUP BY `areaId`, `floor` ORDER BY COUNT(1) DESC LIMIT 1', self::$type, $this->id))
         {
             // get relevant spawn points
-            $points = DB::Aowow()->select('SELECT posX, posY FROM ?_spawns WHERE type = ?d AND typeId = ?d AND areaId = ?d AND floor = ?d AND posX > 0 AND posY > 0', self::$type, $this->id, $res['areaId'], $res['floor']);
+            $points = DB::Aowow()->select('SELECT `posX`, `posY` FROM ?_spawns WHERE `type` = ?d AND `typeId` = ?d AND `areaId` = ?d AND `floor` = ?d AND `posX` > 0 AND `posY` > 0', self::$type, $this->id, $res['areaId'], $res['floor']);
             $spawns = [];
             foreach ($points as $p)
                 $spawns[] = [$p['posX'], $p['posY']];
@@ -585,19 +603,22 @@ trait spawnHelper
         $wpSum    = [];
         $wpIdx    = 0;
         $worldPos = [];
-        $spawns   = DB::Aowow()->select("SELECT * FROM ?_spawns WHERE type = ?d AND typeId = ?d AND posX > 0 AND posY > 0", self::$type, $this->id);
+        $spawns   = DB::Aowow()->select("SELECT * FROM ?_spawns WHERE `type` = ?d AND `typeId` = ?d AND `posX` > 0 AND `posY` > 0", self::$type, $this->id);
 
         if (!$spawns)
             return;
 
         if (User::isInGroup(U_GROUP_MODERATOR))
-            $worldPos = Game::getWorldPosForGUID(self::$type, ...array_column($spawns, 'guid'));
+            if ($guids = array_column(array_filter($spawns, fn($x) => $x['guid'] > 0 || $x['type'] != Type::NPC), 'guid'))
+                $worldPos = Game::getWorldPosForGUID(self::$type, ...$guids);
 
         foreach ($spawns as $s)
         {
+            $isAccessory = $s['guid'] < 0 && $s['type'] == Type::NPC;
+
             // check, if we can attach waypoints to creature
             // we will get a nice clusterfuck of dots if we do this for more GUIDs, than we have colors though
-            if (count($spawns) < 6 && self::$type == Type::NPC)
+            if (count($spawns) < 6 && $s['type'] == Type::NPC)
             {
                 if ($wPoints = DB::Aowow()->select('SELECT * FROM ?_creature_waypoints WHERE creatureOrPath = ?d AND floor = ?d', $s['pathId'] ? -$s['pathId'] : $this->id, $s['floor']))
                 {
@@ -640,7 +661,10 @@ trait spawnHelper
 
             if (User::isInGroup(U_GROUP_STAFF))
             {
-                $info[0] = $s['guid'] < 0 ? 'Vehicle Accessory' : 'GUID'.Lang::main('colon').$s['guid'];
+                if ($isAccessory)
+                    $info[0] = 'Vehicle Accessory';
+                else if ($s['guid'] > 0 && ($s['type'] == Type::NPC || $s['type'] == Type::OBJECT))
+                    $info[0] = 'GUID'.Lang::main('colon').$s['guid'];
 
                 if ($s['phaseMask'] > 1 && ($s['phaseMask'] & 0xFFFF) != 0xFFFF)
                     $info[2] = Lang::game('phases').Lang::main('colon').Util::asHex($s['phaseMask']);
@@ -657,62 +681,27 @@ trait spawnHelper
                     $info[4] = Lang::game('mode').Lang::main('colon').implode(', ', $_);
                 }
 
-                if (self::$type == Type::AREATRIGGER)
+                if ($s['type'] == Type::AREATRIGGER)
                 {
-                    $o = Util::O2Deg($this->getField('orientation'));
-                    $info[5] = 'Orientation'.Lang::main('colon').$o[0].'° ('.$o[1].')';
+                    // teleporter endpoint
+                    if ($s['guid'] < 0)
+                    {
+                        $opts['type'] = 4;
+                        $info[5] = 'Teleport Destination';
+                    }
+                    else
+                    {
+                        $o = Util::O2Deg($this->getField('orientation'));
+                        $info[5] = 'Orientation'.Lang::main('colon').$o[0].'° ('.$o[1].')';
+                    }
                 }
 
                 // guid < 0 are vehicle accessories. those are moved by moving the vehicle
-                if (User::isInGroup(U_GROUP_MODERATOR) && $worldPos && $s['guid'] > 0 && isset($worldPos[$s['guid']]))
-                {
-                    if ($points = Game::worldPosToZonePos($worldPos[$s['guid']]['mapId'], $worldPos[$s['guid']]['posX'], $worldPos[$s['guid']]['posY']))
-                    {
-                        $floors = [];
-                        foreach ($points as $p)
-                        {
-                            if (isset(Game::$areaFloors[$p['areaId']]))
-                                $floors[$p['areaId']][] = $p['floor'];
+                if (User::isInGroup(U_GROUP_MODERATOR) && $worldPos && !$isAccessory && isset($worldPos[$s['guid']]))
+                    $menu = Util::buildPosFixMenu($worldPos[$s['guid']]['mapId'], $worldPos[$s['guid']]['posX'], $worldPos[$s['guid']]['posY'], $s['type'], $s['guid'], $s['areaId'], $s['floor']);
 
-                            if (isset($menu[$p['areaId']]))
-                                continue;
-                            else if ($p['areaId'] == $s['areaId'])
-                                $menu[$p['areaId']] = [$p['areaId'], '$g_zones['.$p['areaId'].']', '', null, ['class' => 'checked q0']];
-                            else
-                                $menu[$p['areaId']] = [$p['areaId'], '$g_zones['.$p['areaId'].']', '$spawnposfix.bind(null, '.self::$type.', '.$s['guid'].', '.$p['areaId'].', -1)', null, null];
-                        }
-
-                        foreach ($floors as $area => $f)
-                        {
-                            $menu[$area][2] = '';
-                            $menu[$area][3] = [];
-                            if ($menu[$area][4])
-                                $menu[$area][4]['class'] = 'checked';
-
-                            foreach ($f as $n)
-                            {
-                                $jsRef = $n;
-                                if ($area != 4273)          // Ulduar is weird maaaan.....
-                                    $jsRef--;
-
-                                // todo: 3959 (BT) and 4075 (Sunwell) start at level 0 or something
-
-                                if ($n == $s['floor'])
-                                    $menu[$area][3][] = [$jsRef, '$g_zone_areas['.$area.']['.$jsRef.']', '', null, ['class' => 'checked q0']];
-                                else
-                                    $menu[$area][3][] = [$jsRef, '$g_zone_areas['.$area.']['.$jsRef.']', '$spawnposfix.bind(null, '.self::$type.', '.$s['guid'].', '.$area.', '.$n.')'];
-                            }
-                        }
-
-                        $menu = array_values($menu);
-                    }
-
-                    if ($menu)
-                    {
-                        $footer = '<br /><span class="q2">Click to move displayed spawn point</span>';
-                        array_unshift($menu, [null, "Move to..."]);
-                    }
-                }
+                if ($menu)
+                    $footer = '<br /><span class="q2">Click to move pin</span>';
             }
 
             if ($info)
@@ -751,7 +740,7 @@ trait spawnHelper
 
     private function createZoneSpawns()                     // [zoneId1, zoneId2, ..]             for locations-column in listview
     {
-        $res = DB::Aowow()->selectCol("SELECT typeId AS ARRAY_KEY, GROUP_CONCAT(DISTINCT areaId) FROM ?_spawns WHERE type = ?d AND typeId IN (?a) GROUP BY typeId", self::$type, $this->getfoundIDs());
+        $res = DB::Aowow()->selectCol("SELECT `typeId` AS ARRAY_KEY, GROUP_CONCAT(DISTINCT `areaId`) FROM ?_spawns WHERE `type` = ?d AND `typeId` IN (?a) AND `posX` > 0 AND `posY` > 0 GROUP BY `typeId`", self::$type, $this->getfoundIDs());
         foreach ($res as &$r)
         {
             $r = explode(',', $r);
@@ -767,7 +756,7 @@ trait spawnHelper
         if (self::$type == Type::SOUND)
             return;
 
-        $res    = DB::Aowow()->select('SELECT areaId, floor, typeId, posX, posY FROM ?_spawns WHERE type = ?d AND typeId IN (?a) AND posX > 0 AND posY > 0', self::$type, $this->getFoundIDs());
+        $res    = DB::Aowow()->select('SELECT `areaId`, `floor`, `typeId`, `posX`, `posY` FROM ?_spawns WHERE `type` = ?d AND `typeId` IN (?a) AND `posX` > 0 AND `posY` > 0', self::$type, $this->getFoundIDs());
         $spawns = [];
         foreach ($res as $data)
         {
@@ -859,9 +848,9 @@ trait sourceHelper
     protected $sources    = [];
     protected $sourceMore = null;
 
-    public function getSources(?array &$s, ?array &$sm) : bool
+    public function getSources(?array &$s = [], ?array &$sm = []) : bool
     {
-        $s = $sm = null;
+        $s = $sm = [];
         if (empty($this->sources[$this->id]))
             return false;
 
@@ -875,12 +864,12 @@ trait sourceHelper
                     $buff[$_curTpl['moreType']][] = $_curTpl['moreTypeId'];
 
             foreach ($buff as $type => $ids)
-                $this->sourceMore[$type] = Type::newList($type, [CFG_SQL_LIMIT_NONE, ['id', $ids]]);
+                $this->sourceMore[$type] = Type::newList($type, [Cfg::get('SQL_LIMIT_NONE'), ['id', $ids]]);
         }
 
         $s = array_keys($this->sources[$this->id]);
         if ($this->curTpl['moreType'] && $this->curTpl['moreTypeId'] && ($srcData = $this->sourceMore[$this->curTpl['moreType']]->getSourceData($this->curTpl['moreTypeId'])))
-            $sm = $srcData;
+            $sm = $srcData[$this->curTpl['moreTypeId']];
         else if (!empty($this->sources[$this->id][SRC_PVP]))
             $sm['p'] = $this->sources[$this->id][SRC_PVP][0];
 
@@ -921,37 +910,23 @@ abstract class Filter
 {
     private static  $wCards = ['*' => '%', '?' => '_'];
 
-    public          $error  = false;                        // erronous search fields
+    public const CR_BOOLEAN   = 1;
+    public const CR_FLAG      = 2;
+    public const CR_NUMERIC   = 3;
+    public const CR_STRING    = 4;
+    public const CR_ENUM      = 5;
+    public const CR_STAFFFLAG = 6;
+    public const CR_CALLBACK  = 7;
+    public const CR_NYI_PH    = 999;
 
-    private         $cndSet = [];
+    public const V_EQUAL      = 8;
+    public const V_RANGE      = 9;
+    public const V_LIST       = 10;
+    public const V_CALLBACK   = 11;
+    public const V_REGEX      = 12;
 
-    /* genericFilter: [FILTER_TYPE, colOrFnName, param1, param2]
-        [FILTER_CR_BOOLEAN,   <string:colName>, <bool:isString>, null]
-        [FILTER_CR_FLAG,      <string:colName>, <int:testBit>,   <bool:matchAny>]       # default param2: matchExact
-        [FILTER_CR_NUMERIC,   <string:colName>, <int:NUM_FLAGS>, <bool:addExtraCol>]
-        [FILTER_CR_STRING,    <string:colName>, <int:STR_FLAGS>, null]
-        [FILTER_CR_ENUM,      <string:colName>, <bool:ANYNONE>,  <bool:isEnumVal>]      # param3 ? cr[2] is val in enum : key in enum
-        [FILTER_CR_STAFFFLAG, <string:colName>, null,            null]
-        [FILTER_CR_CALLBACK,  <string:fnName>,  <mixed:param1>,  <mixed:param2>]
-        [FILTER_CR_NYI_PH,    null,             <int:returnVal>, param2]                # mostly 1: to ignore this criterium; 0: to fail the whole query
-    */
-    protected       $genericFilter = [];
-
-    protected       $enums         = [];                    // criteriumID => [validOptionList]
-
-    /*
-        fieldId => [checkType, checkValue[, fieldIsArray]]
-    */
-    protected       $inputFields   = [];                    // list of input fields defined per page
-    protected       $parentCats    = [];                    // used to validate ty-filter
-    protected       $fiData        = ['c' => [], 'v' =>[]];
-    protected       $formData      =  array(                // data to fill form fields
-                        'form'           => [],             // base form - unsanitized
-                        'setCriteria'    => [],             // dynamic criteria list             - index checked
-                        'setWeights'     => [],             // dynamic weights list              - index checked
-                        'extraCols'      => [],             // extra columns for LV              - added as required
-                        'reputationCols' => []              // simlar and exclusive to extraCols - added as required
-                    );
+    protected const ENUM_ANY     = -2323;
+    protected const ENUM_NONE    = -2324;
 
     protected const PATTERN_NAME = '/[\p{C};%\\\\]/ui';
     protected const PATTERN_CRV  = '/[\p{C};:%\\\\]/ui';
@@ -983,8 +958,40 @@ abstract class Filter
     protected const ENUM_RACE          = array( null,     1,     2,     3,     4,     5,     6,     7,     8,  null,    10,    11,  true, false);
     protected const ENUM_PROFESSION    = array( null,   171,   164,   185,   333,   202,   129,   755,   165,   186,   197,  true, false,   356,   182,   773);
 
+    public          $error  = false;                        // erronous search fields
+
+    private         $cndSet = [];
+
+    /* genericFilter: [FILTER_TYPE, colOrFnName, param1, param2]
+        [self::CR_BOOLEAN,   <string:colName>, <bool:isString>, null]
+        [self::CR_FLAG,      <string:colName>, <int:testBit>,   <bool:matchAny>]       # default param2: matchExact
+        [self::CR_NUMERIC,   <string:colName>, <int:NUM_FLAGS>, <bool:addExtraCol>]
+        [self::CR_STRING,    <string:colName>, <int:STR_FLAGS>, null]
+        [self::CR_ENUM,      <string:colName>, <bool:ANYNONE>,  <bool:isEnumVal>]      # param3 ? crv is val in enum : key in enum
+        [self::CR_STAFFFLAG, <string:colName>, null,            null]
+        [self::CR_CALLBACK,  <string:fnName>,  <mixed:param1>,  <mixed:param2>]
+        [self::CR_NYI_PH,    null,             <int:returnVal>, param2]                # mostly 1: to ignore this criterium; 0: to fail the whole query
+    */
+    protected       $genericFilter = [];
+
+    protected       $enums         = [];                    // criteriumID => [validOptionList]
+
+    /*
+        fieldId => [checkType, checkValue[, fieldIsArray]]
+    */
+    protected       $inputFields   = [];                    // list of input fields defined per page
+    protected       $parentCats    = [];                    // used to validate ty-filter
+    protected       $fiData        = ['c' => [], 'v' =>[]];
+    protected       $formData      =  array(                // data to fill form fields
+                        'form'           => [],             // base form - unsanitized
+                        'setCriteria'    => [],             // dynamic criteria list             - index checked
+                        'setWeights'     => [],             // dynamic weights list              - index checked
+                        'extraCols'      => [],             // extra columns for LV              - added as required
+                        'reputationCols' => []              // simlar and exclusive to extraCols - added as required
+                    );
+
     // parse the provided request into a usable format
-    public function __construct($fromPOST = false, $opts = [])
+    public function __construct(bool $fromPOST = false, array $opts = [])
     {
         if (!empty($opts['parentCats']))
             $this->parentCats = $opts['parentCats'];
@@ -1010,13 +1017,13 @@ abstract class Filter
         return ['formData'];
     }
 
-    public function mergeCat(&$cats)
+    public function mergeCat(&$cats) : void
     {
         foreach ($this->parentCats as $idx => $cat)
             $cats[$idx] = $cat;
     }
 
-    private function &criteriaIterator()
+    private function &criteriaIterator() : Generator
     {
         if (!$this->fiData['c'])
             return;
@@ -1034,9 +1041,9 @@ abstract class Filter
     /* get prepared values */
     /***********************/
 
-    public function getFilterString(array $override = [], array $addCr = [])
+    public function getFilterString(array $override = [], array $addCr = []) : string
     {
-        $_ = [];
+        $filterURL = [];
         foreach (array_merge($this->fiData['c'], $this->fiData['v'], $override) as $k => $v)
         {
             if (isset($addCr[$k]))
@@ -1046,48 +1053,53 @@ abstract class Filter
             }
 
             if (is_array($v) && !empty($v))
-                $_[$k] = $k.'='.implode(':', $v);
+                $filterURL[$k] = $k.'='.implode(':', $v);
             else if ($v !== '')
-                $_[$k] = $k.'='.$v;
+                $filterURL[$k] = $k.'='.$v;
         }
 
         // no criteria were set, so no merge occured .. append
         if ($addCr)
         {
-            $_['cr']  = 'cr='.$addCr['cr'];
-            $_['crs'] = 'crs='.$addCr['crs'];
-            $_['crv'] = 'crv='.$addCr['crv'];
+            $filterURL['cr']  = 'cr='.$addCr['cr'];
+            $filterURL['crs'] = 'crs='.$addCr['crs'];
+            $filterURL['crv'] = 'crv='.$addCr['crv'];
         }
 
-        return implode(';', $_);
+        return implode(';', $filterURL);
     }
 
-    public function getExtraCols()
+    // [<string>ExtraCol, ...]
+    public function getExtraCols() : array
     {
         return array_unique($this->formData['extraCols']);
     }
 
-    public function getSetCriteria()
+    // ['cr' => <array>Criterium, 'crs' => <array>CriteriumSign, 'crv' => <array>CriteriumValue]
+    public function getSetCriteria() : array
     {
         return $this->formData['setCriteria'];
     }
 
-    public function getSetWeights()
+    // [<array>WeightID, <array>WeightValue]
+    public function getSetWeights() : array
     {
         return $this->formData['setWeights'];
     }
 
-    public function getReputationCols()
+    // [<string>ExtraCol, ...]
+    public function getReputationCols() : array
     {
         return $this->formData['reputationCols'];
     }
 
-    public function getForm()
+    // [inputField => FieldValue, ...]
+    public function getForm() : array
     {
         return $this->formData['form'];
     }
 
-    public function getConditions()
+    public function getConditions() : array
     {
         if (!$this->cndSet)
         {
@@ -1096,7 +1108,7 @@ abstract class Filter
 
             // criteria
             foreach ($this->criteriaIterator() as &$_cr)
-                if ($cnd = $this->createSQLForCriterium($_cr))
+                if ($cnd = $this->createSQLForCriterium(...$_cr))
                     $this->cndSet[] = $cnd;
 
             if ($this->cndSet)
@@ -1111,10 +1123,9 @@ abstract class Filter
     /* input sanitization */
     /**********************/
 
-    private function evaluatePOST()
+    private function evaluatePOST() : void
     {
         // doesn't need to set formData['form']; this happens in GET-step
-
         foreach ($this->inputFields as $inp => [$type, $valid, $asArray])
         {
             if (!isset($_POST[$inp]) || $_POST[$inp] === '')
@@ -1141,7 +1152,7 @@ abstract class Filter
         $this->setCriteria();
     }
 
-    private function evaluateGET()
+    private function evaluateGET() : void
     {
         if (empty($_GET['filter']))
             return;
@@ -1160,7 +1171,6 @@ abstract class Filter
             $post[$_[0]] = $_[1];
         }
 
-        $cr = $crs = $crv = [];
         foreach ($this->inputFields as $inp => [$type, $valid, $asArray])
         {
             if (!isset($post[$inp]) || $post[$inp] === '')
@@ -1181,7 +1191,7 @@ abstract class Filter
                     if ($k == 'v')
                         $this->formData['form'][$inp] = $buff;
 
-                    $this->fiData[$k][$inp] = array_map(function ($x) { return strtr($x, Filter::$wCards); }, $buff);
+                    $this->fiData[$k][$inp] = $buff;
                 }
             }
             else if ($val !== '' && $this->checkInput($type, $valid, $val) && $val !== '')
@@ -1189,7 +1199,7 @@ abstract class Filter
                 if ($k == 'v')
                     $this->formData['form'][$inp] = $val;
 
-                $this->fiData[$k][$inp] = strtr($val, Filter::$wCards);
+                $this->fiData[$k][$inp] = $val;
             }
         }
 
@@ -1197,7 +1207,7 @@ abstract class Filter
         $this->setCriteria();
     }
 
-    private function setCriteria()                          // [cr]iterium, [cr].[s]ign, [cr].[v]alue
+    private function setCriteria() : void                   // [cr]iterium, [cr].[s]ign, [cr].[v]alue
     {
         if (empty($this->fiData['c']['cr']) && empty($this->fiData['c']['crs']) && empty($this->fiData['c']['crv']))
             return;
@@ -1208,7 +1218,6 @@ abstract class Filter
             unset($this->fiData['c']['crv']);
 
             $this->error = true;
-
             return;
         }
 
@@ -1241,20 +1250,20 @@ abstract class Filter
                 $gf = $this->genericFilter[$_cr[$i]];
                 switch ($gf[0])
                 {
-                    case FILTER_CR_NUMERIC:
+                    case self::CR_NUMERIC:
                         $_ = $_crs[$i];
                         if (!Util::checkNumeric($_crv[$i], $gf[2]) || !$this->int2Op($_))
                             $unsetme = true;
                         break;
-                    case FILTER_CR_BOOLEAN:
-                    case FILTER_CR_FLAG:
-                    case FILTER_CR_STAFFFLAG:
+                    case self::CR_BOOLEAN:
+                    case self::CR_FLAG:
+                    case self::CR_STAFFFLAG:
                         $_ = $_crs[$i];
                         if (!$this->int2Bool($_))
                             $unsetme = true;
                         break;
-                    case FILTER_CR_ENUM:
-                        if (!Util::checkNumeric($_crs[$i], NUM_REQ_INT))
+                    case self::CR_ENUM:
+                        if (!Util::checkNumeric($_crs[$i], NUM_CAST_INT))
                             $unsetme = true;
                         break;
                 }
@@ -1277,27 +1286,24 @@ abstract class Filter
         );
     }
 
-    private function setWeights()
+    private function setWeights() : void
     {
+        // both empty: not in use
         if (empty($this->fiData['v']['wt']) && empty($this->fiData['v']['wtv']))
             return;
 
+        // one empty: erroneous manual input?
+        if (empty($this->fiData['v']['wt']) || empty($this->fiData['v']['wtv']))
+        {
+            unset($this->fiData['v']['wt']);
+            unset($this->fiData['v']['wtv']);
+
+            $this->error = true;
+            return;
+        }
+
         $_wt  = &$this->fiData['v']['wt'];
         $_wtv = &$this->fiData['v']['wtv'];
-
-        if (empty($_wt) && !empty($_wtv))
-        {
-            unset($_wtv);
-            $this->error = true;
-            return;
-        }
-
-        if (empty($_wtv) && !empty($_wt))
-        {
-            unset($_wt);
-            $this->error = true;
-            return;
-        }
 
         $nwt  = count($_wt);
         $nwtv = count($_wtv);
@@ -1316,11 +1322,11 @@ abstract class Filter
         $this->formData['setWeights'] = [$_wt, $_wtv];
     }
 
-    protected function checkInput($type, $valid, &$val, $recursive = false)
+    protected function checkInput(int $type, mixed $valid, mixed &$val, bool $recursive = false) : bool
     {
         switch ($type)
         {
-            case FILTER_V_EQUAL:
+            case self::V_EQUAL:
                 if (gettype($valid) == 'integer')
                     $val = intval($val);
                 else if (gettype($valid) == 'double')
@@ -1332,7 +1338,7 @@ abstract class Filter
                     return true;
 
                 break;
-            case FILTER_V_LIST:
+            case self::V_LIST:
                 if (!Util::checkNumeric($val, NUM_CAST_INT))
                     return false;
 
@@ -1341,7 +1347,7 @@ abstract class Filter
                     if (gettype($v) != 'array')
                         continue;
 
-                    if ($this->checkInput(FILTER_V_RANGE, $v, $val, true))
+                    if ($this->checkInput(self::V_RANGE, $v, $val, true))
                         return true;
 
                     unset($valid[$k]);
@@ -1351,17 +1357,17 @@ abstract class Filter
                     return true;
 
                 break;
-            case FILTER_V_RANGE:
+            case self::V_RANGE:
                 if (Util::checkNumeric($val, NUM_CAST_INT) && $val >= $valid[0] && $val <= $valid[1])
                     return true;
 
                 break;
-            case FILTER_V_CALLBACK:
+            case self::V_CALLBACK:
                 if ($this->$valid($val))
                     return true;
 
                 break;
-            case FILTER_V_REGEX:
+            case self::V_REGEX:
                 if (!preg_match($valid, $val))
                     return true;
 
@@ -1374,23 +1380,33 @@ abstract class Filter
         return false;
     }
 
-    protected function modularizeString(array $fields, $string = '', $exact = false, $shortStr = false)
+    protected function transformString(string $string, bool $exact) : string
+    {
+        // escape manually entered _; entering % should be prohibited
+        $string = str_replace('_', '\\_', $string);
+
+        // now replace search wildcards with sql wildcards
+        $string = strtr($string, self::$wCards);
+
+        return sprintf($exact ? '%s' : '%%%s%%', $string);
+    }
+
+    protected function modularizeString(array $fields, string $string = '', bool $exact = false, bool $shortStr = false) : array
     {
         if (!$string && !empty($this->fiData['v']['na']))
             $string = $this->fiData['v']['na'];
 
         $qry  = [];
-        $exPH = $exact ? '%s' : '%%%s%%';
-        foreach ($fields as $n => $f)
+        foreach ($fields as $f)
         {
             $sub   = [];
             $parts = $exact ? [$string] : array_filter(explode(' ', $string));
             foreach ($parts as $p)
             {
                 if ($p[0] == '-' && (mb_strlen($p) > 3 || $shortStr))
-                    $sub[] = [$f, sprintf($exPH, str_replace('_', '\\_', mb_substr($p, 1))), '!'];
+                    $sub[] = [$f, $this->transformString(mb_substr($p, 1), $exact), '!'];
                 else if ($p[0] != '-' && (mb_strlen($p) > 2 || $shortStr))
-                    $sub[] = [$f, sprintf($exPH, str_replace('_', '\\_', $p))];
+                    $sub[] = [$f, $this->transformString($p, $exact)];
             }
 
             // single cnd?
@@ -1415,7 +1431,7 @@ abstract class Filter
         return $qry;
     }
 
-    protected function int2Op(&$op)
+    protected function int2Op(mixed &$op) : bool
     {
         switch ($op)
         {
@@ -1429,7 +1445,7 @@ abstract class Filter
         }
     }
 
-    protected function int2Bool(&$op)
+    protected function int2Bool(mixed &$op) : bool
     {
         switch ($op)
         {
@@ -1439,7 +1455,7 @@ abstract class Filter
         }
     }
 
-    protected function list2Mask(array $list, $noOffset = false)
+    protected function list2Mask(array $list, bool $noOffset = false) : int
     {
         $mask = 0x0;
         $o    = $noOffset ? 0 : 1;                          // schoolMask requires this..?
@@ -1456,7 +1472,7 @@ abstract class Filter
     /*    generic criteria    */
     /**************************/
 
-    private function genericBoolean($field, $op, $isString)
+    private function genericBoolean($field, $op, bool $isString) : ?array
     {
         if ($this->int2Bool($op))
         {
@@ -1469,7 +1485,7 @@ abstract class Filter
         return null;
     }
 
-    private function genericBooleanFlags($field, $value, $op, $matchAny = false)
+    private function genericBooleanFlags($field, $value, $op, ?bool $matchAny = false) : ?array
     {
         if (!$this->int2Bool($op))
             return null;
@@ -1482,15 +1498,15 @@ abstract class Filter
             return [[$field, $value, '&'], $value];
     }
 
-    private function genericString($field, $value, $strFlags)
+    private function genericString($field, $value, $strFlags) : ?array
     {
         if ($strFlags & STR_LOCALIZED)
-            $field .= '_loc'.User::$localeId;
+            $field .= '_loc'.Lang::getLocale()->value;
 
         return $this->modularizeString([$field], (string)$value, $strFlags & STR_MATCH_EXACT, $strFlags & STR_ALLOW_SHORT);
     }
 
-    private function genericNumeric($field, &$value, $op, $typeCast)
+    private function genericNumeric($field, $value, $op, $typeCast) : ?array
     {
         if (!Util::checkNumeric($value, $typeCast))
             return null;
@@ -1501,13 +1517,13 @@ abstract class Filter
         return null;
     }
 
-    private function genericEnum($field, $value)
+    private function genericEnum($field, $value) : ?array
     {
         if (is_bool($value))
             return [$field, 0, ($value ? '>' : '<=')];
-        else if ($value == FILTER_ENUM_ANY)                 // any
+        else if ($value == self::ENUM_ANY)                  // any
             return [$field, 0, '!'];
-        else if ($value == FILTER_ENUM_NONE)                // none
+        else if ($value == self::ENUM_NONE)                 // none
             return [$field, 0];
         else if ($value !== null)
             return [$field, $value];
@@ -1515,58 +1531,58 @@ abstract class Filter
         return null;
     }
 
-    protected function genericCriterion(&$cr)
+    protected function genericCriterion(int $cr, int $crs, string $crv) : ?array
     {
-        $gen    = array_pad($this->genericFilter[$cr[0]], 4, null);
+        [$crType, $colOrFn, $param1, $param2] = array_pad($this->genericFilter[$cr], 4, null);
         $result = null;
 
-        switch ($gen[0])
+        switch ($crType)
         {
-            case FILTER_CR_NUMERIC:
-                $result = $this->genericNumeric($gen[1], $cr[2], $cr[1], $gen[2]);
+            case self::CR_NUMERIC:
+                $result = $this->genericNumeric($colOrFn, $crv, $crs, $param1);
                 break;
-            case FILTER_CR_FLAG:
-                $result = $this->genericBooleanFlags($gen[1], $gen[2], $cr[1], $gen[3]);
+            case self::CR_FLAG:
+                $result = $this->genericBooleanFlags($colOrFn, $param1, $crs, $param2);
                 break;
-            case FILTER_CR_STAFFFLAG:
-                if (User::isInGroup(U_GROUP_EMPLOYEE) && $cr[1] >= 0)
-                    $result = $this->genericBooleanFlags($gen[1], (1 << $cr[1]), true);
+            case self::CR_STAFFFLAG:
+                if (User::isInGroup(U_GROUP_EMPLOYEE) && $crs >= 0)
+                    $result = $this->genericBooleanFlags($colOrFn, (1 << $crs), true);
                 break;
-            case FILTER_CR_BOOLEAN:
-                $result = $this->genericBoolean($gen[1], $cr[1], !empty($gen[2]));
+            case self::CR_BOOLEAN:
+                $result = $this->genericBoolean($colOrFn, $crs, !empty($param1));
                 break;
-            case FILTER_CR_STRING:
-                $result = $this->genericString($gen[1], $cr[2], $gen[2]);
+            case self::CR_STRING:
+                $result = $this->genericString($colOrFn, $crv, $param1);
                 break;
-            case FILTER_CR_ENUM:
-                if (!$gen[3] && isset($this->enums[$cr[0]][$cr[1]]))
-                    $result = $this->genericEnum($gen[1], $this->enums[$cr[0]][$cr[1]]);
-                if ($gen[3] && in_array($cr[1], $this->enums[$cr[0]]))
-                    $result = $this->genericEnum($gen[1], $cr[1]);
-                else if ($gen[2] && ($cr[1] == FILTER_ENUM_ANY || $cr[1] == FILTER_ENUM_NONE))
-                    $result = $this->genericEnum($gen[1], $cr[1]);
+            case self::CR_ENUM:
+                if (!$param2 && isset($this->enums[$cr][$crs]))
+                    $result = $this->genericEnum($colOrFn, $this->enums[$cr][$crs]);
+                if ($param2 && in_array($crs, $this->enums[$cr]))
+                    $result = $this->genericEnum($colOrFn, $crs);
+                else if ($param1 && ($crs == self::ENUM_ANY || $crs == self::ENUM_NONE))
+                    $result = $this->genericEnum($colOrFn, $crs);
                 break;
-            case FILTER_CR_CALLBACK:
-                $result = $this->{$gen[1]}($cr, $gen[2], $gen[3]);
+            case self::CR_CALLBACK:
+                $result = $this->{$colOrFn}([$cr, $crs, $crv], $param1, $param2);
                 break;
-            case FILTER_CR_NYI_PH:                          // do not limit with not implemented filters
-                if (is_int($gen[2]))
-                    return [$gen[2]];
+            case self::CR_NYI_PH:                           // do not limit with not implemented filters
+                if (is_int($param1))
+                    return [$param1];
 
                 // for nonsensical values; compare against 0
-                if ($this->int2Op($cr[1]) && Util::checkNumeric($cr[2]))
+                if ($this->int2Op($crs) && Util::checkNumeric($crv))
                 {
-                    if ($cr[1] == '=')
-                        $cr[1] = '==';
+                    if ($crs == '=')
+                        $crs = '==';
 
-                    return eval('return ('.$cr[2].' '.$cr[1].' 0);') ? [1] : [0];
+                    return eval('return ('.$crv.' '.$crs.' 0);') ? [1] : [0];
                 }
                 else
                     return [0];
         }
 
-        if ($result && $gen[0] == FILTER_CR_NUMERIC && !empty($gen[3]))
-            $this->formData['extraCols'][] = $cr[0];
+        if ($result && $crType == self::CR_NUMERIC && !empty($param2))
+            $this->formData['extraCols'][] = $cr;
 
         return $result;
     }
@@ -1577,19 +1593,19 @@ abstract class Filter
     /* non-generic values and criteria */
     /***********************************/
 
-    protected function createSQLForCriterium(array &$cr) : array
+    protected function createSQLForCriterium(int &$cr, int &$crs, string &$crv) : array
     {
         if (!$this->genericFilter)                          // criteria not in use - no error
             return [];
 
-        if (in_array($cr[0], array_keys($this->genericFilter)))
-            if ($genCr = $this->genericCriterion($cr))
+        if (in_array($cr, array_keys($this->genericFilter)))
+            if ($genCr = $this->genericCriterion($cr, $crs, $crv))
                 return $genCr;
 
         $this->error = true;
-        trigger_error('Filter::createSQLForCriterium - received unhandled criterium: ["'.$cr[0].'", "'.$cr[1].'", "'.$cr[2].'"]', E_USER_WARNING);
+        trigger_error('Filter::createSQLForCriterium - received unhandled criterium: ["'.$cr.'", "'.$crs.'", "'.$crv.'"]', E_USER_WARNING);
 
-        unset($cr);
+        unset($cr, $crs, $crv);
 
         return [];
     }
